@@ -1,0 +1,8 @@
+.idea/
+.DS_Store
+__MACOSX/
+node_modules/
+dist/
+*.zip
+.env
+.env.local
