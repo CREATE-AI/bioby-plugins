@@ -1,0 +1,20 @@
+{
+  "profileMessageButton": [
+    "div[role=\"button\"]:has(svg[aria-label=\"Message\"])",
+    "div[role=\"button\"]:has(svg[aria-label=\"发消息\"])",
+    "a[href*=\"/direct/t/\"]",
+    "div[role=\"button\"]:has-text(\"Message\")"
+  ],
+  "composerTextarea": [
+    "div[role=\"textbox\"][contenteditable=\"true\"]",
+    "textarea[placeholder*=\"Message\"]",
+    "div[aria-label=\"Message\"][contenteditable=\"true\"]"
+  ],
+  "sendButton": [
+    "div[role=\"button\"]:has-text(\"Send\")",
+    "div[role=\"button\"]:has-text(\"发送\")"
+  ],
+  "loggedInHandleHints": [
+    "a[href^=\"/\"][role=\"link\"]"
+  ]
+}
