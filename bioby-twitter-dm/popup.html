@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bioby Twitter DM</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <!-- 主界面：线索建联 + DM 收录 -->
+  <div id="viewMain">
+    <header>
+      <div class="brand">Bioby · X DM</div>
+      <button type="button" id="openSettings" class="linkish" title="设置">⚙</button>
+    </header>
+
+    <section class="toolbar">
+      <select id="templateSelect" title="话术模板"></select>
+      <button type="button" id="refresh" class="primary">刷新</button>
+    </section>
+
+    <div id="banner" class="banner hidden"></div>
+    <div id="list" class="list"></div>
+
+    <section class="capture">
+      <div class="capture-title">收录 DM（阶段4）</div>
+      <select id="captureLead"></select>
+      <select id="captureDirection">
+        <option value="IN">达人回复 IN</option>
+        <option value="OUT">我方发出 OUT</option>
+      </select>
+      <textarea id="captureText" placeholder="粘贴 DM 原文…"></textarea>
+      <button type="button" id="captureBtn" class="primary">收录（IN 自动抽报价）</button>
+    </section>
+
+    <footer>人工点击发送 · 不自动群发</footer>
+  </div>
+
+  <!-- 设置：账号密码登录，自动保存 JWT -->
+  <div id="viewSettings" class="hidden">
+    <header class="settings-header">
+      <button type="button" id="backToMain" class="back-btn" title="返回">← 返回</button>
+      <div class="brand">设置</div>
+      <span class="spacer"></span>
+    </header>
+
+    <section class="settings-body">
+      <p class="hint">使用 CRM 账号登录后，扩展会自动保存 Token，无需手动复制。</p>
+
+      <label for="apiBase">API Base URL</label>
+      <input id="apiBase" type="url" placeholder="http://localhost:8080" autocomplete="off" />
+
+      <label for="campaignId">Campaign ID（活动 ID）</label>
+      <input id="campaignId" type="text" placeholder="活动 ID" autocomplete="off" />
+
+      <label for="businessAccount">当前商务号标识</label>
+      <input id="businessAccount" type="text" placeholder="如 biz_small / biz_big" autocomplete="off" />
+
+      <label for="username">账号（用户名）</label>
+      <input id="username" type="text" placeholder="CRM 登录用户名" autocomplete="username" />
+
+      <label for="password">密码</label>
+      <input id="password" type="password" placeholder="CRM 登录密码" autocomplete="current-password" />
+
+      <div id="loginInfo" class="login-info hidden"></div>
+      <div id="settingsStatus" class="banner hidden"></div>
+
+      <div class="settings-actions">
+        <button type="button" id="loginSave" class="primary block">登录并保存</button>
+        <button type="button" id="testConn" class="ghost block">测试连接</button>
+        <button type="button" id="logout" class="ghost block">退出登录</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Bioby Twitter DM",
+  "version": "0.3.6",
+  "description": "侧栏常驻：CRM 登录拉取线索，半自动/批量 X 私信，发送结果校验与细粒度失败状态，一键同步对话抽报价。",
+  "minimum_chrome_version": "114",
+  "action": {
+    "default_title": "Bioby Twitter DM",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "clipboardWrite",
+    "scripting",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "http://localhost:*/*",
+    "http://127.0.0.1:*/*",
+    "https://*/*"
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": ["xDom.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

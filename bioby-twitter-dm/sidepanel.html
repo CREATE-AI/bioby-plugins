@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bioby Twitter DM</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <div id="viewMain">
+    <header>
+      <div>
+        <div class="brand">Bioby · X DM</div>
+        <div id="crmUserLabel" class="subbrand">未登录 CRM</div>
+      </div>
+      <button type="button" id="openSettings" class="linkish" title="设置">⚙</button>
+    </header>
+
+    <section class="toolbar">
+      <select id="templateSelect" title="话术模板"></select>
+      <button type="button" id="refresh" class="primary">刷新</button>
+    </section>
+
+    <section class="mode-bar" id="modeBar">
+      <div class="mode-row">
+        <span class="mode-label">工作模式</span>
+        <div class="seg" id="workModeSeg" role="group" aria-label="工作模式">
+          <button type="button" class="seg-btn" data-work-mode="small">小号建联</button>
+          <button type="button" class="seg-btn" data-work-mode="big">大号沟通</button>
+        </div>
+      </div>
+      <div id="modeHint" class="mode-hint">当前：小号</div>
+      <div id="smallQueueRow" class="mode-row">
+        <span class="mode-label">队列</span>
+        <div class="seg" id="smallQueueSeg" role="group" aria-label="小号队列">
+          <button type="button" class="seg-btn" data-small-queue="pending">待建联</button>
+          <button type="button" class="seg-btn" data-small-queue="handoff">已私信待移交</button>
+        </div>
+      </div>
+      <div id="bigStatusRow" class="mode-row hidden">
+        <span class="mode-label">状态</span>
+        <select id="bigStatusFilter" title="大号线索状态筛选">
+          <option value="PLUGIN_CONTACTED">PLUGIN_CONTACTED</option>
+          <option value="REPLIED">REPLIED</option>
+          <option value="PENDING_PLUGIN">PENDING_PLUGIN</option>
+          <option value="ALL">全部</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="bulk-send" id="bulkSendSection">
+      <div class="bulk-send-title">批量发送</div>
+      <div class="bulk-send-row">
+        <label class="bulk-field">发送量
+          <input id="bulkCount" type="number" min="1" max="50" value="10" />
+        </label>
+        <label class="bulk-field">间隔(秒)
+          <input id="bulkInterval" type="number" min="3" max="120" value="12" />
+        </label>
+      </div>
+      <div class="bulk-send-actions">
+        <button type="button" id="bulkSendBtn" class="primary">一键发送</button>
+        <button type="button" id="bulkStopBtn" class="ghost hidden">停止</button>
+      </div>
+    </section>
+
+    <div id="banner" class="banner hidden"></div>
+    <div id="list" class="list"></div>
+
+    <section class="capture">
+      <div class="capture-title">收录 DM / 报价</div>
+      <div class="bulk-send-row">
+        <label class="bulk-field">同步条数
+          <input id="syncCount" type="number" min="1" max="30" value="10" />
+        </label>
+      </div>
+      <button type="button" id="syncInboxBtn" class="primary block" style="margin-bottom:10px">
+        同步全部对话并抽报价
+      </button>
+      <label class="capture-label" for="captureLead">具体达人线索</label>
+      <select id="captureLead" title="选择要收录消息的达人线索"></select>
+      <label class="capture-label" for="captureDirection">消息方向</label>
+      <select id="captureDirection" title="IN=达人回复，OUT=我方发出">
+        <option value="IN">达人回复 IN</option>
+        <option value="OUT">我方发出 OUT</option>
+      </select>
+      <label class="capture-label" for="captureText">DM 原文</label>
+      <p class="capture-hint">粘贴该达人对话原文；选 IN 时自动抽报价</p>
+      <textarea id="captureText" placeholder="粘贴 DM 原文…"></textarea>
+      <button type="button" id="captureBtn" class="ghost block">单条收录（IN 自动抽报价）</button>
+    </section>
+
+    <footer>侧栏常驻 · 发送需本机已登录 X · 移交/大号请用本侧栏</footer>
+  </div>
+
+  <div id="viewSettings" class="hidden">
+    <header class="settings-header">
+      <button type="button" id="backToMain" class="back-btn" title="返回">← 返回</button>
+      <div class="brand">设置</div>
+      <span class="spacer"></span>
+    </header>
+
+    <section class="settings-body">
+      <p class="hint">CRM 账号登录后自动保存 Token。X 聊天解锁码仅本机使用，默认 1234。</p>
+
+      <label for="apiBase">API Base URL</label>
+      <input id="apiBase" type="url" placeholder="http://localhost:8080" autocomplete="off" />
+
+      <label for="campaignId">Campaign ID（活动 ID）</label>
+      <input id="campaignId" type="text" placeholder="活动 ID" autocomplete="off" />
+
+      <label for="businessAccount">当前商务号标识</label>
+      <input id="businessAccount" type="text" placeholder="如 biz_small / biz_big" autocomplete="off" />
+
+      <label for="handoffTarget">转交目标商务号（大号）</label>
+      <input id="handoffTarget" type="text" placeholder="转交时使用，如 biz_big" autocomplete="off" />
+
+      <label for="username">账号（用户名）</label>
+      <input id="username" type="text" placeholder="CRM 登录用户名" autocomplete="username" />
+
+      <label for="password">密码</label>
+      <input id="password" type="password" placeholder="CRM 登录密码" autocomplete="current-password" />
+
+      <label for="xPasscode">X 聊天解锁码（passcode）</label>
+      <input id="xPasscode" type="text" placeholder="1234" autocomplete="off" />
+
+      <div id="loginInfo" class="login-info hidden"></div>
+      <div id="settingsStatus" class="banner hidden"></div>
+
+      <div class="settings-actions">
+        <button type="button" id="loginSave" class="primary block">登录并保存</button>
+        <button type="button" id="testConn" class="ghost block">测试连接</button>
+        <button type="button" id="logout" class="ghost block">退出登录</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
