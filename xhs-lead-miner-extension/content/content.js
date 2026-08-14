@@ -427,6 +427,9 @@
             publishTimeText: n.publishTimeText || '',
             publishAt: n.publishAt || '',
             noteId: n.noteId || '',
+            noteUrl: n.noteUrl || '',
+            redId: n.redId || '',
+            desc: n.desc || '',
           })),
         });
       } catch (error) {

@@ -880,8 +880,9 @@ async function ensureNoteDetailHelper(tabId) {
 
 /**
  * 对 AI 候选限速补采笔记正文（控风控：限量 + 间隔 + 验证码停）
+ * 在搜索页用真实鼠标点封面打开详情层，不再新开 explore 标签。
  */
-async function enrichCandidatesWithDetail(candidates, config, keyword) {
+async function enrichCandidatesWithDetail(candidates, config, keyword, searchTabId) {
   if (config.enrichNoteDetail === false) {
     return { candidates, enriched: 0, stoppedByCaptcha: false };
   }
@@ -895,13 +896,47 @@ async function enrichCandidatesWithDetail(candidates, config, keyword) {
   const delayMax = config.detailDelayMaxMs || 5000;
   let enriched = 0;
   let stoppedByCaptcha = false;
-  const tab = await chrome.tabs.create({ url: 'about:blank', active: true });
+
+  let tabId = searchTabId;
+  if (!tabId) {
+    const found = await findXhsSearchTab();
+    tabId = found.tab?.id;
+  }
+  if (!tabId) {
+    return { candidates, enriched: 0, stoppedByCaptcha: false };
+  }
+
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tabId, { active: true });
+  } catch {
+    // ignore
+  }
+
+  try {
+    await attachDebugger(tabId);
+  } catch (error) {
+    await touchRun({
+      status: 'running',
+      currentKeyword: keyword,
+      lastProgress: {
+        keyword,
+        phase: 'detail_enrich_stopped',
+        message: `无法模拟鼠标点详情：${error?.message || error}。请关掉该页 F12 后重试`,
+      },
+    });
+    return { candidates, enriched: 0, stoppedByCaptcha: false };
+  }
 
   try {
     for (let i = 0; i < limit; i += 1) {
       if (stopRequested) break;
       const item = candidates[i];
-      if (!item?.noteUrl) continue;
+      const noteId = item?.noteId
+        || String(item?.noteUrl || '').match(/[a-f0-9]{24}/i)?.[0]
+        || '';
+      if (!noteId) continue;
 
       await touchRun({
         status: 'running',
@@ -912,17 +947,24 @@ async function enrichCandidatesWithDetail(candidates, config, keyword) {
           enrichIndex: i + 1,
           enrichTotal: limit,
           title: item.title,
+          via: 'mouse_click',
         },
       });
 
       try {
-        await chrome.tabs.update(tab.id, { url: item.noteUrl, active: true });
-        await waitForTabComplete(tab.id, 25000);
+        const clicked = await clickSearchCardForNote(tabId, noteId);
+        if (!clicked?.ok) continue;
+
+        const overlay = await waitForNoteOverlay(tabId, 4500);
+        if (!overlay?.hasOverlay && !overlay?.hasDesc && !overlay?.isExplore) {
+          await closeNoteOverlayOnTab(tabId);
+          continue;
+        }
+
         await humanDelay(delayMin, delayMax);
-        await ensureNoteDetailHelper(tab.id);
-        const res = await chrome.tabs.sendMessage(tab.id, { type: 'ENRICH_CURRENT_NOTE' });
-        // 主世界再取一次小红书号（比 isolated DOM 更稳）
-        const redMap = await extractRedIdMapFromTab(tab.id);
+        await ensureNoteDetailHelper(tabId);
+        const res = await chrome.tabs.sendMessage(tabId, { type: 'ENRICH_CURRENT_NOTE' });
+        const redMap = await extractRedIdMapFromTab(tabId);
         const redFromPage = redMap.byNoteId?.[String(item.noteId || '')]
           || redMap.byAuthorId?.[String(item.authorId || '')]
           || '';
@@ -931,7 +973,6 @@ async function enrichCandidatesWithDetail(candidates, config, keyword) {
           break;
         }
         if (res?.ok && (res.desc || res.publishAt || res.redId || redFromPage)) {
-          // 仅当正文与标题不同时才覆盖（搜索卡用 title 占位 desc）
           if (res.desc && res.desc.trim() && res.desc.trim() !== String(item.title || '').trim()) {
             item.desc = res.desc;
           }
@@ -956,14 +997,16 @@ async function enrichCandidatesWithDetail(candidates, config, keyword) {
         // 单条失败不阻断
       }
 
+      await closeNoteOverlayOnTab(tabId);
       await humanDelay(800, 1600);
     }
   } finally {
     try {
-      await chrome.tabs.remove(tab.id);
+      await closeNoteOverlayOnTab(tabId);
     } catch {
       // ignore
     }
+    await detachDebugger(tabId);
   }
 
   return { candidates, enriched, stoppedByCaptcha };
@@ -1291,7 +1334,7 @@ async function crawlKeyword(tabId, keyword, config, stillNeedForTarget, skipNote
     let capped = result.candidates.slice(0, config.maxCandidatesPerKeyword ?? 80);
 
     // 限速补采正文，提升「需求 vs 广告」判断
-    const enrichResult = await enrichCandidatesWithDetail(capped, config, keyword);
+    const enrichResult = await enrichCandidatesWithDetail(capped, config, keyword, tabId);
     capped = enrichResult.candidates;
     if (enrichResult.stoppedByCaptcha) {
       await touchRun({
@@ -1602,16 +1645,25 @@ const labState = {
   stayX: 0,
   stayY: 0,
   dynamic: null,
+  cards: [],
+  lastCard: null,
+  detailTabId: null,
+  detailVia: null,
+  searchUrl: null,
 };
 
 function labSessionText() {
-  if (!labState.tabId) return '会话：未开始';
-  const bits = [`tab=${labState.tabId}`];
+  if (!labState.tabId && !labState.detailTabId) return '会话：未开始';
+  const bits = [];
+  if (labState.tabId) bits.push(`tab=${labState.tabId}`);
   if (labState.attached) bits.push('已接管鼠标');
   if (labState.holding) bits.push('正在悬停筛选区');
   if (labState.dynamic?.newest) bits.push('已拿到最新坐标');
   if (labState.dynamic?.week) bits.push('已拿到一周内坐标');
-  return `会话：${bits.join(' · ')}`;
+  if (labState.cards?.length) bits.push(`卡片${labState.cards.length}张`);
+  if (labState.detailVia === 'click') bits.push('详情=鼠标点卡');
+  if (labState.detailVia === 'url' && labState.detailTabId) bits.push(`详情tab=${labState.detailTabId}`);
+  return `会话：${bits.join(' · ') || '未开始'}`;
 }
 
 async function labStopHold() {
@@ -1639,8 +1691,253 @@ function labStartHold(tabId, x, y) {
   })();
 }
 
+async function cdpKeyEscape(tabId) {
+  await cdpSend(tabId, 'Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: 'Escape',
+    code: 'Escape',
+    windowsVirtualKeyCode: 27,
+    nativeVirtualKeyCode: 27,
+  });
+  await new Promise((r) => setTimeout(r, 40));
+  await cdpSend(tabId, 'Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'Escape',
+    code: 'Escape',
+    windowsVirtualKeyCode: 27,
+    nativeVirtualKeyCode: 27,
+  });
+}
+
+async function probeFirstNoteCard(tabId, preferredNoteId = '') {
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (wantId) => {
+      const NOTE_RE = /\/(?:explore|discovery\/item|search_result\/[^/]+)\/([a-f0-9]{24})/i;
+      const parseId = (href) => {
+        const m = String(href || '').match(NOTE_RE);
+        return m?.[1] || '';
+      };
+      const vis = (r) => r.width >= 48 && r.height >= 48
+        && r.bottom > 90 && r.top < window.innerHeight - 24
+        && r.left >= 0 && r.right <= window.innerWidth + 8;
+      const cardRoot = (anchor) => {
+        let node = anchor;
+        for (let i = 0; i < 8 && node; i += 1) {
+          if (node.querySelector?.('a[href*="/user/profile/"]')) return node;
+          node = node.parentElement;
+        }
+        return anchor.parentElement || anchor;
+      };
+      const pickTarget = (anchor, allowOffscreen) => {
+        const okRect = (r, minH = 48) => {
+          if (!r || r.width < 48 || r.height < minH) return false;
+          return allowOffscreen || vis(r);
+        };
+        const card = cardRoot(anchor);
+        const img = card.querySelector?.('img');
+        const ir = img?.getBoundingClientRect?.();
+        if (okRect(ir, 80)) return { el: img, rect: ir, via: 'cover' };
+        const ar = anchor.getBoundingClientRect();
+        if (okRect(ar, 80)) return { el: anchor, rect: ar, via: 'link' };
+        const cr = card.getBoundingClientRect();
+        if (okRect(cr)) return { el: card, rect: cr, via: 'card' };
+        return null;
+      };
+      const toHit = (item, noteId, href, title) => {
+        const r = item.el.getBoundingClientRect();
+        return {
+          ok: true,
+          noteId,
+          href,
+          title: String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+          via: item.via,
+          x: r.left + r.width / 2,
+          y: r.top + Math.min(r.height * 0.32, 90),
+          rect: {
+            left: Math.round(r.left),
+            top: Math.round(r.top),
+            width: Math.round(r.width),
+            height: Math.round(r.height),
+          },
+        };
+      };
+
+      const anchors = Array.from(document.querySelectorAll(
+        'a[href*="/explore/"], a[href*="/discovery/item/"], a[href*="/search_result/"]',
+      ));
+      const seen = new Set();
+      const candidates = [];
+      for (const anchor of anchors) {
+        const href = anchor.href || anchor.getAttribute('href') || '';
+        if (/\/user\/profile\//i.test(href)) continue;
+        const noteId = parseId(href);
+        if (!noteId || seen.has(noteId)) continue;
+        seen.add(noteId);
+        const allowOffscreen = Boolean(wantId) && noteId === wantId;
+        const item = pickTarget(anchor, allowOffscreen);
+        if (!item) continue;
+        const title = (anchor.innerText || item.el?.alt || '').slice(0, 80);
+        candidates.push({ noteId, href, title, item });
+      }
+      if (!candidates.length) {
+        return { ok: false, error: '视口里没找到可点的笔记封面' };
+      }
+      const preferred = wantId
+        ? candidates.find((c) => c.noteId === wantId)
+        : null;
+      if (wantId && !preferred) {
+        return { ok: false, error: '页面 DOM 里没有这张笔记卡', wantId, candidateCount: candidates.length };
+      }
+      const picked = preferred || candidates[0];
+      try {
+        picked.item.el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+      } catch {
+        // ignore
+      }
+      const hit = toHit(picked.item, picked.noteId, picked.href, picked.title);
+      return { ...hit, preferredHit: Boolean(preferred), candidateCount: candidates.length };
+    },
+    args: [preferredNoteId || ''],
+  });
+  return result || { ok: false, error: '页面无探测结果' };
+}
+
+async function probeNoteOverlay(tabId) {
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: () => {
+      const pick = (el) => (el?.innerText || el?.textContent || '').replace(/\s+/g, ' ').trim();
+      const desc = document.querySelector(
+        '#detail-desc, [id*="detail-desc"], [class*="note-text"], [class*="desc"]',
+      );
+      const descText = pick(desc).slice(0, 160);
+      const overlay = document.querySelector(
+        '[class*="note-detail"], [class*="note-container"], [class*="noteContainer"], [class*="close-circle"]',
+      );
+      let close = null;
+      for (const el of document.querySelectorAll(
+        '[class*="close"], [class*="Close"], [aria-label*="关闭"], [aria-label*="close"]',
+      )) {
+        const r = el.getBoundingClientRect();
+        if (r.width < 10 || r.height < 10 || r.width > 72 || r.height > 72) continue;
+        if (r.left > window.innerWidth * 0.5) continue;
+        if (r.top < 8 || r.top > window.innerHeight * 0.7) continue;
+        close = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        break;
+      }
+      return {
+        url: location.href,
+        path: location.pathname,
+        hasDesc: descText.length >= 8,
+        descPreview: descText,
+        hasOverlay: Boolean(overlay || (desc && descText.length >= 8)),
+        isExplore: /\/(?:explore|discovery\/item)\//i.test(location.pathname),
+        close,
+      };
+    },
+  });
+  return result || { hasOverlay: false };
+}
+
+async function waitForNoteOverlay(tabId, timeoutMs = 4500) {
+  const start = Date.now();
+  let last = { hasOverlay: false };
+  while (Date.now() - start < timeoutMs) {
+    last = await probeNoteOverlay(tabId);
+    if (last?.hasOverlay || last?.hasDesc || last?.isExplore) return last;
+    await new Promise((r) => setTimeout(r, 280));
+  }
+  return last;
+}
+
+async function closeNoteOverlayOnTab(tabId) {
+  const isOpen = (overlay) => Boolean(overlay?.hasOverlay || overlay?.hasDesc);
+
+  try {
+    let overlay = await probeNoteOverlay(tabId);
+    if (!isOpen(overlay) && !overlay?.isExplore) return;
+
+    if (overlay?.close) {
+      await cdpClickAt(tabId, overlay.close.x, overlay.close.y);
+    } else {
+      await cdpKeyEscape(tabId);
+    }
+    await new Promise((r) => setTimeout(r, 500));
+
+    overlay = await probeNoteOverlay(tabId);
+    if (isOpen(overlay)) {
+      await cdpKeyEscape(tabId);
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    overlay = await probeNoteOverlay(tabId);
+    if (isOpen(overlay)) {
+      await cdpClickAt(tabId, 36, 240);
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    const start = Date.now();
+    while (Date.now() - start < 2500) {
+      overlay = await probeNoteOverlay(tabId);
+      if (!isOpen(overlay)) return;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  } catch {
+    // ignore
+  }
+}
+
+async function clickSearchCardForNote(tabId, noteId) {
+  const tryProbe = () => probeFirstNoteCard(tabId, noteId);
+
+  let probe = await tryProbe();
+  if (noteId && !probe?.ok) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => window.scrollTo({ top: 0, behavior: 'auto' }),
+    });
+    await new Promise((r) => setTimeout(r, 700));
+    probe = await tryProbe();
+  }
+  if (!probe?.ok) {
+    return { ok: false, error: probe?.error || '搜索页没找到这张笔记卡' };
+  }
+  await new Promise((r) => setTimeout(r, 280));
+  const again = await probeFirstNoteCard(tabId, probe.noteId);
+  if (again?.ok) probe = again;
+  await cdpMove(tabId, probe.x, probe.y);
+  await new Promise((r) => setTimeout(r, 180));
+  await cdpClickAt(tabId, probe.x, probe.y);
+  return { ok: true, ...probe };
+}
+
+async function labCloseDetailTab() {
+  const via = labState.detailVia;
+  const searchTabId = labState.tabId;
+  const extraTabId = labState.detailTabId;
+  labState.detailVia = null;
+  labState.detailTabId = null;
+
+  if (via === 'click' && searchTabId) {
+    await closeNoteOverlayOnTab(searchTabId);
+    return;
+  }
+
+  if (!extraTabId || extraTabId === searchTabId) return;
+  try {
+    await chrome.tabs.remove(extraTabId);
+  } catch {
+    // ignore
+  }
+}
+
 async function labEndSession() {
   await labStopHold();
+  await labCloseDetailTab();
   if (labState.attached && labState.tabId) {
     await detachDebugger(labState.tabId);
   }
@@ -1649,6 +1946,50 @@ async function labEndSession() {
   labState.dynamic = null;
   labState.stayX = 0;
   labState.stayY = 0;
+  labState.cards = [];
+  labState.lastCard = null;
+  labState.detailVia = null;
+  labState.searchUrl = null;
+}
+
+function isXhsNoteDetailUrl(url) {
+  return /xiaohongshu\.com\/(?:explore|discovery\/item)\//i.test(String(url || ''));
+}
+
+async function labResolveDetailTabId() {
+  if (labState.detailVia === 'click' && labState.tabId) {
+    return labState.tabId;
+  }
+  if (labState.detailTabId) {
+    try {
+      const tab = await chrome.tabs.get(labState.detailTabId);
+      if (tab?.id && isXhsNoteDetailUrl(tab.url)) return tab.id;
+    } catch {
+      labState.detailTabId = null;
+    }
+  }
+  const detailTabs = await chrome.tabs.query({
+    url: [
+      'https://www.xiaohongshu.com/explore/*',
+      'https://www.xiaohongshu.com/discovery/item/*',
+    ],
+  });
+  if (detailTabs[0]?.id) {
+    labState.detailTabId = detailTabs[0].id;
+    return detailTabs[0].id;
+  }
+  return null;
+}
+
+function pickLabCard(cards) {
+  return (cards || []).find((c) => c?.noteId || c?.noteUrl) || null;
+}
+
+function labCardNoteUrl(card) {
+  if (!card) return '';
+  if (card.noteUrl) return card.noteUrl;
+  if (card.noteId) return `https://www.xiaohongshu.com/explore/${card.noteId}`;
+  return '';
 }
 
 async function labEnsureSession() {
@@ -1702,10 +2043,163 @@ async function labWaitPanel(tabId, timeoutMs) {
   return result;
 }
 
+async function labLoadCardsFromSearch() {
+  if (labState.cards?.length) {
+    return { ok: true, cards: labState.cards, reused: true };
+  }
+  const ready = await labEnsureSession();
+  if (!ready.ok) return ready;
+  await ensureContentScript(labState.tabId);
+  const res = await chrome.tabs.sendMessage(labState.tabId, { type: 'TEST_EXTRACT_CARDS' });
+  labState.cards = Array.isArray(res?.cards) ? res.cards : [];
+  labState.lastCard = pickLabCard(labState.cards);
+  return {
+    ok: Boolean(res?.ok) && labState.cards.length > 0,
+    count: labState.cards.length,
+    cards: labState.cards,
+    error: labState.cards.length ? undefined : '搜索页没有读到卡片，请先点步骤 6',
+  };
+}
+
+async function runLabDetailStep(step) {
+  if (step === 'openNoteDetail') {
+    const loaded = await labLoadCardsFromSearch();
+    if (!loaded.ok) {
+      return { ...loaded, session: labSessionText() };
+    }
+    const card = pickLabCard(loaded.cards);
+    const noteUrl = labCardNoteUrl(card);
+    if (!noteUrl) {
+      return { ok: false, error: '卡片没有笔记链接，请先点步骤 6 再试', session: labSessionText() };
+    }
+    labState.lastCard = card;
+    labState.detailVia = 'url';
+
+    if (labState.detailTabId) {
+      try {
+        await chrome.tabs.update(labState.detailTabId, { url: noteUrl, active: true });
+      } catch {
+        labState.detailTabId = null;
+      }
+    }
+    if (!labState.detailTabId) {
+      const tab = await chrome.tabs.create({ url: noteUrl, active: true });
+      labState.detailTabId = tab.id;
+    }
+    await waitForTabComplete(labState.detailTabId, 25000);
+    await humanDelay(900, 1400);
+    return {
+      ok: true,
+      message: `已打开详情：${card.title || card.noteId}`,
+      card: {
+        title: card.title || '',
+        authorName: card.authorName || '',
+        noteId: card.noteId || '',
+        noteUrl,
+        publishTimeText: card.publishTimeText || '',
+        publishAt: card.publishAt || '',
+        redId: card.redId || '',
+      },
+      session: labSessionText(),
+    };
+  }
+
+  const detailTabId = await labResolveDetailTabId();
+  if (!detailTabId) {
+    return {
+      ok: false,
+      error: '还没有详情页。请先点步骤 7，或手动打开一条笔记再点 8',
+      session: labSessionText(),
+    };
+  }
+
+  try {
+    await chrome.tabs.update(detailTabId, { active: true });
+  } catch {
+    // ignore
+  }
+  await waitForTabComplete(detailTabId, 25000);
+  await humanDelay(800, 1200);
+  await ensureNoteDetailHelper(detailTabId);
+
+  let res;
+  try {
+    res = await chrome.tabs.sendMessage(detailTabId, { type: 'ENRICH_CURRENT_NOTE' });
+  } catch (error) {
+    return {
+      ok: false,
+      error: `详情页脚本无响应：${error?.message || error}`,
+      session: labSessionText(),
+    };
+  }
+
+  const card = labState.lastCard || {};
+  const redMap = await extractRedIdMapFromTab(detailTabId);
+  const redFromPage = redMap.byNoteId?.[String(card.noteId || '')]
+    || redMap.byAuthorId?.[String(card.authorId || '')]
+    || '';
+  const redId = res?.redId || redFromPage || '';
+
+  if (res?.captcha) {
+    return {
+      ok: false,
+      captcha: true,
+      message: res.message || '检测到登录/验证码，已停止详情补采',
+      session: labSessionText(),
+    };
+  }
+
+  const desc = res?.desc || '';
+  const title = card.title || '';
+  const descSameAsTitle = Boolean(desc && title && desc.trim() === title.trim());
+  return {
+    ok: Boolean(res?.ok && (desc || res.publishAt || redId)),
+    message: res?.ok
+      ? `详情已读：正文 ${desc.length} 字${descSameAsTitle ? '（与标题相同，正式采集不会覆盖）' : ''}`
+      : (res?.message || '未解析到笔记正文'),
+    before: {
+      title,
+      desc: card.desc || '',
+      publishTimeText: card.publishTimeText || '',
+      publishAt: card.publishAt || '',
+      redId: card.redId || '',
+    },
+    after: {
+      desc,
+      descSameAsTitle,
+      imageCount: Array.isArray(res?.imageUrls) ? res.imageUrls.length : 0,
+      publishTimeText: res?.publishTimeText || '',
+      publishAt: res?.publishAt || '',
+      redId,
+    },
+    session: labSessionText(),
+  };
+}
+
 async function runLabStep(step, payload = {}) {
   if (step === 'endSession') {
     await labEndSession();
     return { ok: true, message: '会话已结束', session: labSessionText() };
+  }
+
+  if (step === 'closeNoteDetail') {
+    const had = Boolean(labState.detailTabId) || labState.detailVia === 'click';
+    const via = labState.detailVia;
+    await labCloseDetailTab();
+    if (labState.tabId) {
+      try {
+        await chrome.tabs.update(labState.tabId, { active: true });
+      } catch {
+        // ignore
+      }
+    }
+    return {
+      ok: true,
+      message: had
+        ? (via === 'click' ? '已关掉详情层，回到搜索' : '已关掉详情页，回到搜索')
+        : '没有打开中的详情',
+      session: labSessionText(),
+    };
   }
 
   if (step === 'openSearch') {
@@ -1725,9 +2219,80 @@ async function runLabStep(step, payload = {}) {
     return { ok: true, message: `已打开搜索：${keyword}`, url, session: labSessionText() };
   }
 
+  if (step === 'openNoteDetail' || step === 'enrichNoteDetail') {
+    return runLabDetailStep(step);
+  }
+
   const ready = await labEnsureSession();
   if (!ready.ok) return { ...ready, session: labSessionText() };
   const tabId = labState.tabId;
+
+  if (step === 'clickNoteDetail') {
+    await labStopHold();
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      labState.searchUrl = tab?.url || labState.searchUrl;
+    } catch {
+      // ignore
+    }
+    if (labState.detailVia === 'url' && labState.detailTabId) {
+      try { await chrome.tabs.remove(labState.detailTabId); } catch { /* ignore */ }
+      labState.detailTabId = null;
+    }
+
+    const alreadyOpen = await probeNoteOverlay(tabId);
+    if (alreadyOpen?.hasOverlay || alreadyOpen?.isExplore) {
+      labState.detailVia = 'click';
+      return {
+        ok: true,
+        message: '详情层已经开着，直接点 8 读取即可',
+        overlay: alreadyOpen,
+        session: labSessionText(),
+      };
+    }
+
+    const preferredId = labState.lastCard?.noteId || '';
+    let probe = await probeFirstNoteCard(tabId, preferredId);
+    if (!probe?.ok) {
+      return { ok: false, error: probe?.error || '没找到可点的笔记封面', session: labSessionText() };
+    }
+    await new Promise((r) => setTimeout(r, 350));
+    const again = await probeFirstNoteCard(tabId, probe.noteId);
+    if (again?.ok) probe = again;
+
+    await cdpMove(tabId, probe.x, probe.y);
+    await new Promise((r) => setTimeout(r, 220));
+    await cdpClickAt(tabId, probe.x, probe.y);
+    await new Promise((r) => setTimeout(r, 1600));
+
+    const overlay = await probeNoteOverlay(tabId);
+    labState.detailVia = 'click';
+    labState.lastCard = {
+      ...(labState.lastCard || {}),
+      noteId: probe.noteId,
+      noteUrl: probe.href || labCardNoteUrl({ noteId: probe.noteId }),
+      title: probe.title || labState.lastCard?.title || '',
+    };
+
+    const opened = Boolean(overlay?.hasOverlay || overlay?.hasDesc || overlay?.isExplore);
+    return {
+      ok: true,
+      message: opened
+        ? '已用鼠标点封面，搜索页上像是弹出了详情'
+        : '已用鼠标点封面。请看搜索页有没有弹出详情层（主采集还不会走这条）',
+      via: 'mouse_click',
+      probe: {
+        noteId: probe.noteId,
+        title: probe.title,
+        clickVia: probe.via,
+        x: Math.round(probe.x),
+        y: Math.round(probe.y),
+        preferredHit: probe.preferredHit,
+      },
+      overlay,
+      session: labSessionText(),
+    };
+  }
 
   if (step === 'openFilter') {
     const probe = await probeFilter(tabId);
@@ -1843,6 +2408,8 @@ async function runLabStep(step, payload = {}) {
     await ensureContentScript(tabId);
     try {
       const res = await chrome.tabs.sendMessage(tabId, { type: 'TEST_EXTRACT_CARDS' });
+      labState.cards = Array.isArray(res?.cards) ? res.cards : [];
+      labState.lastCard = pickLabCard(labState.cards);
       return { ok: Boolean(res?.ok), ...res, session: labSessionText() };
     } catch (error) {
       return { ok: false, error: String(error?.message || error), session: labSessionText() };

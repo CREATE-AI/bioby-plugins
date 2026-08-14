@@ -51,5 +51,9 @@ export function initLab() {
   bind('leaveFilterBtn', 'leaveFilter');
   bind('scrollOnceBtn', 'scrollOnce');
   bind('extractBtn', 'extractCards');
+  bind('openDetailBtn', 'openNoteDetail');
+  bind('clickDetailBtn', 'clickNoteDetail');
+  bind('enrichDetailBtn', 'enrichNoteDetail');
+  bind('closeDetailBtn', 'closeNoteDetail');
   bind('endSessionBtn', 'endSession');
 }

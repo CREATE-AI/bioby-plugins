@@ -4,7 +4,7 @@
 (function initXhsFilterMain() {
   const CMD_ATTR = 'data-xhs-lead-filter-cmd';
   const RES_ATTR = 'data-xhs-lead-filter-res';
-  const VERSION = '1.12.31';
+  const VERSION = '1.12.35';
 
   function publishLabelCandidates(days) {
     const d = Number(days) || 7;

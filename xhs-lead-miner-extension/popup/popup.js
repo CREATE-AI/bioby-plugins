@@ -378,7 +378,7 @@ async function refreshState() {
     if (p.phase === 'collecting') {
       els.progressText.textContent = `正在收藏 ${p.collectIndex || 0}/${p.collectTotal || '?'}`;
     } else if (p.phase === 'detail_enrich') {
-      els.progressText.textContent = `详情补采 ${p.enrichIndex || 0}/${p.enrichTotal || '?'} · ${state.currentKeyword || ''}`;
+      els.progressText.textContent = `详情补采（点卡） ${p.enrichIndex || 0}/${p.enrichTotal || '?'} · ${state.currentKeyword || ''}`;
     } else if (p.phase === 'detail_enrich_stopped') {
       els.progressText.textContent = p.message || '详情补采遇验证码已停止';
     } else if (p.phase === 'search_filters_done') {

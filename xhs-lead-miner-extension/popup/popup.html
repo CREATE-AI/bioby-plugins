@@ -70,7 +70,7 @@
         </label>
         <label class="row-check">
           <input id="enrichNoteDetail" type="checkbox" checked />
-          详情补采正文（限量，提升广告过滤）
+          详情补采正文（鼠标点搜索卡，限量，提升广告过滤）
         </label>
         <div class="grid">
           <label>
@@ -127,7 +127,7 @@
 
   <div id="viewLab" class="view">
     <section class="panel">
-      <p class="hint">对着旁边的小红书搜索页逐步测。点 1 之后请马上点 2、3（鼠标会停在「筛选」上）。该页不要开 F12。</p>
+      <p class="hint">对着旁边的小红书搜索页逐步测。点 1 之后请马上点 2、3（鼠标会停在「筛选」上）。该页不要开 F12。详情补采会另开笔记页，搜索页会留着。</p>
       <label for="labKeyword">测试关键词</label>
       <input id="labKeyword" type="text" value="美区influencer" />
       <div class="actions" style="margin-top:8px">
@@ -153,6 +153,17 @@
         <button id="scrollOnceBtn" class="ghost">5. 滚动一屏</button>
         <button id="extractBtn" class="ghost">6. 读取卡片</button>
       </div>
+    </section>
+
+    <section class="panel">
+      <div class="hint" style="margin-bottom:8px">详情补采</div>
+      <div class="actions" style="flex-wrap:wrap">
+        <button id="openDetailBtn" class="ghost">7. 打开一条详情</button>
+        <button id="clickDetailBtn" class="ghost">7b. 鼠标点开详情</button>
+        <button id="enrichDetailBtn" class="ghost">8. 读取详情正文</button>
+        <button id="closeDetailBtn" class="ghost">9. 关掉详情</button>
+      </div>
+      <div class="hint">先点 6。7 是新标签打开链接（对照用）。7b 和正式采集一样：鼠标点搜索卡封面。8 抽正文。点 7b / 采集时不要开 F12。</div>
     </section>
 
     <section class="panel">
