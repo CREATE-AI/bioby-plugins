@@ -147,7 +147,7 @@
           ok: true,
           via: applied.via || 'plugin_only',
           maxAgeDays: days,
-          message: applied.message || `插件按近 ${days} 天过滤`,
+          message: applied.message || '未使用小红书筛选，将不按发帖时间丢帖',
           mainWorld: applied,
         };
       }
@@ -157,7 +157,7 @@
       ok: true,
       via: 'plugin_only',
       maxAgeDays: days,
-      message: `插件按近 ${days} 天过滤（未使用小红书筛选）`,
+      message: '未使用小红书筛选，将不按发帖时间丢帖',
     };
   }
 

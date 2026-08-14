@@ -13,9 +13,15 @@
   box-sizing: border-box;
 }
 
-body {
-  width: 380px;
+html, body {
   margin: 0;
+  min-width: 320px;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  min-height: 100vh;
   padding: 14px;
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   background: var(--bg);
@@ -25,6 +31,14 @@ body {
 header h1 {
   margin: 0;
   font-size: 18px;
+}
+
+.version {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+  vertical-align: middle;
 }
 
 .subtitle {
@@ -185,6 +199,45 @@ select {
 .tab.active {
   background: var(--primary);
   color: #fff;
+}
+
+.view-tabs {
+  margin: 0 0 12px;
+}
+
+.view-tab {
+  flex: 1;
+  background: #f3f3f3;
+  color: var(--text);
+  font-size: 13px;
+  padding: 8px 4px;
+}
+
+.view-tab.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.view {
+  display: none;
+}
+
+.view.active {
+  display: block;
+}
+
+.lab-log {
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #1f1f1f;
+  color: #f3f3f3;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .lead-actions {

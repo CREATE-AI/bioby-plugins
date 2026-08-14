@@ -227,7 +227,6 @@
     let rounds = 0;
     let stagnantRounds = 0;
     let knownSkipped = 0;
-    let consecutiveAgeHeavyRounds = 0;
     const filterStats = {
       scanned: 0,
       accepted: 0,
@@ -254,7 +253,7 @@
           phase: preSearchFilters.ok ? 'search_filters_done' : 'search_filters',
           searchFilters: preSearchFilters,
           message: preSearchFilters.via === 'plugin_only'
-            ? `插件按近 ${maxAgeDays} 天过滤，开始滚动…`
+            ? '平台筛选未稳住，开始滚动…'
             : '',
           warning: preSearchFilters.ok ? '' : (preSearchFilters.warning || preSearchFilters.error || ''),
         });
@@ -296,17 +295,6 @@
           filterStats.scanned += stats.scanned;
           filterStats.hardRejected += stats.hardRejected;
           filterStats.rescued += stats.rescued || 0;
-          filterStats.ageRejected = (filterStats.ageRejected || 0) + (stats.ageRejected || 0);
-          filterStats.ageUnknownRejected = (filterStats.ageUnknownRejected || 0)
-            + (stats.ageUnknownRejected || 0);
-
-          // 最新序下越滚越旧：本轮新卡几乎全被年龄闸掉则累计，连续多轮早停
-          const ageDrop = (stats.ageRejected || 0) + (stats.ageUnknownRejected || 0);
-          if (fresh.length >= 3 && ageDrop >= Math.ceil(fresh.length * 0.8) && candidates.length === 0) {
-            consecutiveAgeHeavyRounds += 1;
-          } else if (fresh.length > 0) {
-            consecutiveAgeHeavyRounds = 0;
-          }
 
           for (const item of candidates) {
             if (pendingAi.size >= maxCandidatesPerKeyword) break;
@@ -330,8 +318,8 @@
         reportProgress({
           keyword,
           round: rounds + 1,
-          phase: 'scrolling',
-          message: '正在滚动采集…',
+          phase: rounds === 0 ? 'reading' : 'scrolling',
+          message: rounds === 0 ? '正在读取首屏卡片…' : '正在滚动采集…',
           totalCollected: useAiFilter ? pendingAi.size : collected.size,
           cardsSeen: seenNoteIds.size,
           pendingAi: pendingAi.size,
@@ -343,14 +331,22 @@
           break;
         }
 
-        if (consecutiveAgeHeavyRounds >= 1) {
-          break;
-        }
-
         if (stagnantRounds >= 4) break;
 
         rounds += 1;
         if (rounds >= maxScrollRounds || stopRequested) break;
+
+        reportProgress({
+          keyword,
+          round: rounds,
+          phase: 'scrolling',
+          message: '正在滚动采集…',
+          totalCollected: useAiFilter ? pendingAi.size : collected.size,
+          cardsSeen: seenNoteIds.size,
+          pendingAi: pendingAi.size,
+          filterMode: useAiFilter ? 'ai' : 'rules',
+          filterStats: { ...filterStats },
+        });
 
         await humanScrollStep();
         await humanDelay(scrollDelayMinMs, scrollDelayMaxMs);
@@ -409,6 +405,33 @@
 
     if (message.type === 'PING') {
       sendResponse({ ok: true, page: location.href });
+      return false;
+    }
+
+    if (message.type === 'TEST_SCROLL_ONCE') {
+      humanScrollStep()
+        .then(() => sendResponse({ ok: true, message: '已滚动一屏' }))
+        .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+
+    if (message.type === 'TEST_EXTRACT_CARDS') {
+      try {
+        const raw = window.__XHS_LEAD_EXTRACTOR__?.extractNotesFromDom?.() || [];
+        sendResponse({
+          ok: true,
+          count: raw.length,
+          cards: raw.slice(0, 12).map((n) => ({
+            title: n.title || '',
+            authorName: n.authorName || '',
+            publishTimeText: n.publishTimeText || '',
+            publishAt: n.publishAt || '',
+            noteId: n.noteId || '',
+          })),
+        });
+      } catch (error) {
+        sendResponse({ ok: false, error: String(error?.message || error) });
+      }
       return false;
     }
 

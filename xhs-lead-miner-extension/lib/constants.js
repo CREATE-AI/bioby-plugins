@@ -119,7 +119,7 @@ export const DEFAULT_CONFIG = {
   aiPrefilterMode: 'safe',
   aiKeepHardExclude: false,
   maxCandidatesPerKeyword: 100,
-  maxAgeDays: 7,
+  maxAgeDays: 0,
   sortByTime: false,
   /** 本轮目标：筛出可触达的「符合」条数（主路径不再依赖收藏） */
   targetCollectedCount: 15,

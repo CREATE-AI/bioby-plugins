@@ -2,7 +2,7 @@ import { DEFAULT_CONFIG, STORAGE_KEYS } from '../lib/constants.js';
 import { buildSearchUrl, humanDelay } from '../lib/human-behavior.js';
 import { upsertLeads, getConfig, setConfig, setRunState, getRunState, getLeads, updateLeadReview } from '../lib/storage.js';
 import { judgeLeadsWithAi, testAiConnection, chunkArray } from '../lib/ai-judge.js';
-import { passesMaxAgeDays, filterLeadsByMaxAge, classifyLeadMaxAge } from '../lib/age-filter.js';
+import { classifyLeadMaxAge } from '../lib/age-filter.js';
 import { resolveLeadPublishAt } from '../lib/publish-time.js';
 
 let activeTabId = null;
@@ -11,6 +11,30 @@ let queueRunning = false;
 let keepAliveAlarm = 'xhs-lead-keepalive';
 
 const STALE_RUN_MS = 10 * 60 * 1000;
+
+async function enableRightSidePanel() {
+  try {
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  } catch {
+    // 旧版 Chrome 无 sidePanel
+  }
+}
+
+enableRightSidePanel();
+chrome.runtime.onInstalled.addListener(enableRightSidePanel);
+chrome.runtime.onStartup.addListener(enableRightSidePanel);
+
+chrome.action.onClicked.addListener(async (tab) => {
+  try {
+    if (tab?.windowId) {
+      await chrome.sidePanel.open({ windowId: tab.windowId });
+    } else if (tab?.id) {
+      await chrome.sidePanel.open({ tabId: tab.id });
+    }
+  } catch {
+    // ignore
+  }
+});
 
 /** 在页面主世界读取 __INITIAL_STATE__ 中的小红书号映射（isolated 世界读不到） */
 async function extractRedIdMapFromTab(tabId) {
@@ -249,7 +273,14 @@ async function ensureStateBridge(tabId) {
     const [{ result: already }] = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: () => Boolean(window.__XHS_FILTER_PING__ && window.__XHS_APPLY_FILTER__),
+      func: () => Boolean(
+        window.__XHS_FILTER_PING__
+        && window.__XHS_APPLY_FILTER__
+        && window.__XHS_APPLY_NEWEST__
+        && window.__XHS_WAIT_PANEL__
+        && window.__XHS_BEGIN_WAIT_PANEL__
+        && window.__XHS_TAKE_WAIT_PANEL__
+      ),
     });
     if (already) return true;
   } catch {
@@ -265,7 +296,14 @@ async function ensureStateBridge(tabId) {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: () => Boolean(window.__XHS_FILTER_PING__ && window.__XHS_APPLY_FILTER__),
+      func: () => Boolean(
+        window.__XHS_FILTER_PING__
+        && window.__XHS_APPLY_FILTER__
+        && window.__XHS_APPLY_NEWEST__
+        && window.__XHS_WAIT_PANEL__
+        && window.__XHS_BEGIN_WAIT_PANEL__
+        && window.__XHS_TAKE_WAIT_PANEL__
+      ),
     });
     return Boolean(result);
   } catch {
@@ -327,41 +365,422 @@ async function readFilterUiStateOnTab(tabId, maxAgeDays = 7) {
   }
 }
 
+function isXhsSearchResultUrl(url) {
+  return /xiaohongshu\.com\/search_result/i.test(String(url || ''));
+}
+
+async function findXhsSearchTab() {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (isXhsSearchResultUrl(active?.url)) return { tab: active };
+
+  const inWindow = await chrome.tabs.query({
+    currentWindow: true,
+    url: ['https://www.xiaohongshu.com/search_result*'],
+  });
+  if (inWindow[0]) return { tab: inWindow[0] };
+
+  const anySearch = await chrome.tabs.query({
+    url: ['https://www.xiaohongshu.com/search_result*'],
+  });
+  if (anySearch[0]) return { tab: anySearch[0] };
+
+  if (active?.url?.includes('xiaohongshu.com')) {
+    return { error: '当前是小红书页面，但不是搜索结果页。请先搜一个关键词，再点「筛选最新」。' };
+  }
+  return { error: '请先打开小红书搜索结果页，再点「筛选最新」。' };
+}
+
+async function applyNewestSortOnTab(tabId) {
+  await ensureStateBridge(tabId);
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: async () => {
+        if (typeof window.__XHS_APPLY_NEWEST__ === 'function') {
+          return window.__XHS_APPLY_NEWEST__();
+        }
+        return { ok: false, error: '筛选脚本未注入，请刷新小红书页面后重试' };
+      },
+    });
+    return result || { ok: false, error: '页面无返回' };
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error) };
+  }
+}
+
+async function applyNewestByUrlNav(tabId, tabUrl) {
+  const u = new URL(tabUrl);
+  u.searchParams.set('sort', 'time_descending');
+  await chrome.tabs.update(tabId, { url: u.toString(), active: true });
+  await waitForTabComplete(tabId, 30000);
+  await humanDelay(1800, 2800);
+  await ensureStateBridge(tabId);
+  await waitForSearchPageReady(tabId, 15000);
+
+  const ui = await readFilterUiStateOnTab(tabId, 7);
+  const tab = await chrome.tabs.get(tabId);
+  let urlSort = false;
+  try {
+    urlSort = new URL(tab.url).searchParams.get('sort') === 'time_descending';
+  } catch {
+    urlSort = false;
+  }
+  const ok = ui?.state?.sort === '最新' || urlSort;
+  return {
+    ok,
+    via: 'url_nav',
+    state: ui?.state || null,
+    urlSort,
+    message: ok
+      ? '页面点击失败，已用 URL sort=time_descending 刷新'
+      : '点击和 URL 都未能确认「最新」',
+    error: ok ? undefined : '点击和 URL 都未能确认「最新」',
+  };
+}
+
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function debuggerTarget(tabId) {
+  return { tabId };
+}
+
+async function attachDebugger(tabId) {
+  try {
+    await chrome.debugger.detach(debuggerTarget(tabId));
+  } catch {
+    // 未附着
+  }
+  await chrome.debugger.attach(debuggerTarget(tabId), '1.3');
+}
+
+async function detachDebugger(tabId) {
+  try {
+    await chrome.debugger.detach(debuggerTarget(tabId));
+  } catch {
+    // ignore
+  }
+}
+
+async function cdpSend(tabId, method, params) {
+  return chrome.debugger.sendCommand(debuggerTarget(tabId), method, params);
+}
+
+async function cdpMove(tabId, x, y) {
+  await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: Math.round(x),
+    y: Math.round(y),
+    pointerType: 'mouse',
+  });
+}
+
+async function cdpClickAt(tabId, x, y) {
+  const px = Math.round(x);
+  const py = Math.round(y);
+  await cdpMove(tabId, px, py);
+  await new Promise((r) => setTimeout(r, 120));
+  await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: px,
+    y: py,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+    pointerType: 'mouse',
+  });
+  await new Promise((r) => setTimeout(r, 40));
+  await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: px,
+    y: py,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+    pointerType: 'mouse',
+  });
+}
+
+async function cdpSlideTo(tabId, fromX, fromY, toX, toY, onStep) {
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const dist = Math.hypot(dx, dy) || 1;
+  const steps = Math.max(6, Math.min(18, Math.round(dist / 16)));
+  let x = fromX;
+  let y = fromY;
+  for (let i = 1; i <= steps; i += 1) {
+    const t = i / steps;
+    x = fromX + dx * t;
+    y = fromY + dy * t;
+    onStep?.(x, y);
+    await cdpMove(tabId, x, y);
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  return { x, y };
+}
+
+async function keepMouseOnRight(tabId, x, y, ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    await cdpMove(tabId, x, y);
+    await new Promise((r) => setTimeout(r, 90));
+  }
+}
+
+function compactFilterDebug(debug) {
+  if (!debug || typeof debug !== 'object') return debug || null;
+  const filter = debug.filter;
+  return {
+    version: debug.version,
+    drawerOpen: debug.drawerOpen,
+    newestActive: debug.newestActive,
+    weekActive: debug.weekActive,
+    hasNewest: Boolean(debug.newest),
+    hasPanel: Boolean(debug.panel),
+    filterXY: filter ? { x: Math.round(filter.x), y: Math.round(filter.y) } : null,
+    filterClass: debug.filterClass,
+    nested: debug.debug || undefined,
+  };
+}
+
+async function probeFilter(tabId) {
+  await ensureStateBridge(tabId);
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: () => {
+      if (typeof window.__XHS_PROBE_FILTER__ === 'function') {
+        return window.__XHS_PROBE_FILTER__();
+      }
+      return { error: '探测脚本未注入，请刷新小红书搜索页后再试' };
+    },
+  });
+  return result || { error: '页面无探测结果' };
+}
+
+async function testSortNewest() {
+  const found = await findXhsSearchTab();
+  if (!found.tab) {
+    return {
+      ok: false,
+      via: 'no_tab',
+      reason: found.error || '没有找到小红书搜索结果页',
+      error: found.error || '没有找到小红书搜索结果页',
+    };
+  }
+  return applyPlatformNewestFilterOnTab(found.tab.id);
+}
+
+async function applyPlatformNewestFilterOnTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tabId, { active: true });
+  } catch {
+    // ignore
+  }
+  await ensureStateBridge(tabId);
+
+  try {
+    await attachDebugger(tabId);
+  } catch (error) {
+    return {
+      ok: false,
+      via: 'debugger',
+      reason: `无法模拟真实鼠标：${error?.message || error}。请关掉该页的 F12，重新加载扩展后再试。`,
+      error: String(error?.message || error),
+    };
+  }
+
+  try {
+    let probe = await probeFilter(tabId);
+    if (probe?.error) {
+      return { ok: false, via: 'probe', reason: probe.error, error: probe.error };
+    }
+    if (!probe?.filter) {
+      return {
+        ok: false,
+        via: 'no_filter_btn',
+        reason: '右侧没找到「筛选」按钮。请停在搜索结果页（全部/图文那一行的右边）。',
+        debug: probe?.debug,
+      };
+    }
+
+    const stayX = probe.filter.x;
+    const stayY = probe.filter.y;
+    const alreadyOpen = Boolean(probe.drawerOpen && probe.newest);
+
+    /**
+     * 已验证：第一次点击不能取消。
+     * 只悬停再点一次会失败。第一次点击会激活筛选热区（抽屉常会闪一下），
+     * 鼠标继续停在按钮上时再点第二次，抽屉才会保持打开。
+     */
+    if (!alreadyOpen) {
+      await cdpMove(tabId, stayX, stayY);
+      await new Promise((r) => setTimeout(r, 300));
+      await cdpClickAt(tabId, stayX, stayY);
+    }
+
+    let holding = true;
+    const holdMouse = (async () => {
+      while (holding) {
+        try {
+          await cdpMove(tabId, stayX, stayY);
+        } catch {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 120));
+      }
+    })();
+
+    const waitPanel = async (timeoutMs) => {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: async (ms) => {
+          if (typeof window.__XHS_WAIT_PANEL__ !== 'function') {
+            return { error: '等待脚本未注入，请刷新小红书页面' };
+          }
+          const hit = await window.__XHS_WAIT_PANEL__(ms);
+          if (!hit?.newest) {
+            const d = hit?.debug || {};
+            return {
+              error: `已点「筛选」，但抽屉没保持打开。debug=${JSON.stringify(d)}`,
+              debug: d,
+            };
+          }
+          return { ok: true, ...hit };
+        },
+        args: [timeoutMs],
+      });
+      return result;
+    };
+
+    let dynamic = null;
+    try {
+      dynamic = await waitPanel(900);
+      if (!dynamic?.ok) {
+        await cdpClickAt(tabId, stayX, stayY);
+        dynamic = await waitPanel(3500);
+      }
+    } finally {
+      holding = false;
+      await holdMouse;
+    }
+
+    if (!dynamic?.ok || !dynamic?.newest) {
+      return {
+        ok: false,
+        via: 'no_newest',
+        reason: dynamic?.error
+          || '点了两次「筛选」，抽屉仍没保持打开。',
+        debug: dynamic?.debug,
+      };
+    }
+
+    await new Promise((r) => setTimeout(r, 180));
+    await cdpMove(tabId, dynamic.newest.x, dynamic.newest.y);
+    await new Promise((r) => setTimeout(r, 200));
+    await cdpClickAt(tabId, dynamic.newest.x, dynamic.newest.y);
+    await keepMouseOnRight(tabId, dynamic.newest.x, dynamic.newest.y, 280);
+
+    // 点完「最新」立刻点「一周内」，用抽屉刚打开时记下的坐标，不要先 probe（抽屉一收就丢）。
+    let week = dynamic.week;
+    if (!week) {
+      probe = await probeFilter(tabId);
+      week = probe?.week;
+    }
+    let weekClicked = false;
+    if (!week) {
+      return {
+        ok: false,
+        clicked: true,
+        via: 'no_week',
+        reason: '已点「最新」，但没找到「一周内」坐标。',
+        newestActive: Boolean((await probeFilter(tabId))?.newestActive),
+        weekActive: false,
+        weekClicked: false,
+      };
+    }
+    await new Promise((r) => setTimeout(r, 150));
+    await cdpMove(tabId, week.x, week.y);
+    await new Promise((r) => setTimeout(r, 180));
+    await cdpClickAt(tabId, week.x, week.y);
+    await keepMouseOnRight(tabId, week.x, week.y, 280);
+    weekClicked = true;
+
+    // 抽屉靠悬停撑着：鼠标移出筛选区域就会收，不用点「收起」。
+    const leaveX = dynamic.panel
+      ? Math.max(80, dynamic.panel.left - 80)
+      : Math.max(80, stayX - 220);
+    const leaveY = (dynamic.panel?.top || stayY) + 180;
+    await cdpSlideTo(tabId, week.x, week.y, leaveX, leaveY);
+    await new Promise((r) => setTimeout(r, 400));
+
+    probe = await probeFilter(tabId);
+    const drawerClosed = !probe?.drawerOpen;
+    return {
+      ok: weekClicked,
+      clicked: true,
+      via: 'cdp_click',
+      reason: `已点「最新」和「一周内」，鼠标已移出筛选区。抽屉${drawerClosed ? '已收' : '仍开着'}。`,
+      message: drawerClosed ? '最新 + 一周内已选中，筛选已收起' : '已点最新和一周内并移开鼠标，请看筛选是否收起',
+      newestActive: Boolean(probe?.newestActive) || weekClicked,
+      weekActive: Boolean(probe?.weekActive) || weekClicked,
+      weekClicked,
+      drawerOpen: Boolean(probe?.drawerOpen),
+      filterClass: probe?.filterClass,
+    };
+  } finally {
+    await detachDebugger(tabId);
+  }
+}
+
 async function applySearchFiltersOnTab(tabId, maxAgeDays = 7) {
   const days = Number(maxAgeDays) || 7;
   await focusTabForFilter(tabId);
   await ensureStateBridge(tabId);
 
-  try {
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId },
-      world: 'MAIN',
-      func: async (d) => {
-        if (typeof window.__XHS_APPLY_FILTER__ === 'function') {
-          return window.__XHS_APPLY_FILTER__(d);
-        }
-        return {
-          ok: true,
-          via: 'plugin_only',
-          maxAgeDays: d,
-          message: `插件按近 ${d} 天过滤`,
-        };
-      },
-      args: [days],
-    });
-    return result || {
-      ok: true,
-      via: 'plugin_only',
-      maxAgeDays: days,
-    };
-  } catch {
+  const ui = await applyPlatformNewestFilterOnTab(tabId);
+  const applied = Boolean(ui?.clicked || ui?.newestActive || ui?.weekActive);
+  if (applied) {
+    const fresh = await waitForFilterResultsFresh(tabId, days, 12000);
     return {
       ok: true,
-      via: 'plugin_only',
+      via: ui.via || 'cdp_click',
       maxAgeDays: days,
-      message: `插件按近 ${days} 天过滤`,
+      newestActive: Boolean(ui.newestActive),
+      weekActive: Boolean(ui.weekActive),
+      fresh,
+      message: `已点筛选「最新」${ui.weekActive ? ' + 「一周内」' : ''}，开始采集`,
+      ui,
     };
   }
+
+  return {
+    ok: true,
+    via: 'plugin_only',
+    maxAgeDays: days,
+    newestActive: false,
+    weekActive: false,
+    warning: ui?.reason || ui?.error,
+    message: '平台筛选未稳住，将不按发帖时间丢帖，继续采集',
+    ui,
+  };
 }
 
 /** 筛选点击后等待结果刷新，并抽样校验时间 */
@@ -777,14 +1196,13 @@ async function collectLeads(leads, config) {
 
 async function crawlKeyword(tabId, keyword, config, stillNeedForTarget, skipNoteIds = []) {
   const url = buildSearchUrl(keyword);
-  const maxAge = config.maxAgeDays ?? 7;
 
   await touchRun({
     status: 'running',
     currentKeyword: keyword,
-    lastProgress: { keyword, phase: 'search_filters', message: `正在打开搜索页（插件按近 ${maxAge} 天过滤）…` },
+    lastProgress: { keyword, phase: 'search_filters', message: `正在打开搜索页，点筛选「最新 + 一周内」…` },
   });
-  await notifyTabStatus(tabId, `线索助手：打开搜索页，按近 ${maxAge} 天过滤…`, 12000);
+  await notifyTabStatus(tabId, `线索助手：打开搜索页，点筛选「最新 + 一周内」…`, 12000);
 
   // 每次都带筛选参数刷新
   await chrome.tabs.update(tabId, { url, active: true });
@@ -793,7 +1211,12 @@ async function crawlKeyword(tabId, keyword, config, stillNeedForTarget, skipNote
   await ensureContentScript(tabId);
   await waitForSearchPageReady(tabId);
 
-  const searchFilters = await applySearchFiltersOnTab(tabId, maxAge);
+  const searchFilters = await applySearchFiltersOnTab(tabId, 7);
+  await notifyTabStatus(
+    tabId,
+    searchFilters.message || '线索助手：已处理搜索筛选',
+    8000,
+  );
 
   await touchRun({
     status: 'running',
@@ -802,7 +1225,7 @@ async function crawlKeyword(tabId, keyword, config, stillNeedForTarget, skipNote
       keyword,
       phase: 'search_filters_done',
       searchFilters,
-      message: searchFilters.message || `插件按近 ${maxAge} 天过滤`,
+      message: searchFilters.message || '筛选完成，准备滚动',
     },
   });
 
@@ -828,7 +1251,7 @@ async function crawlKeyword(tabId, keyword, config, stillNeedForTarget, skipNote
         keyword,
         skipNoteIds,
         maxCandidatesPerKeyword: config.maxCandidatesPerKeyword ?? 100,
-        maxAgeDays: config.maxAgeDays ?? 7,
+        maxAgeDays: 0,
         maxScrollRounds: Math.min(config.maxScrollRounds ?? 15, 20),
         searchFilters,
         skipSearchFilters: true,
@@ -863,14 +1286,6 @@ async function crawlKeyword(tabId, keyword, config, stillNeedForTarget, skipNote
     applyRedIdMap(result.candidates, redMap);
   }
 
-  if (Array.isArray(result.candidates)) {
-    applyRedIdMap(result.candidates, redMap);
-    const maxAgePre = config.maxAgeDays ?? 7;
-    if (maxAgePre > 0) {
-      result.candidates = filterLeadsByMaxAge(result.candidates, maxAgePre);
-    }
-  }
-
   if (result.needsAi && Array.isArray(result.candidates) && result.candidates.length) {
     // 限制单词 AI 候选，避免卡太久
     let capped = result.candidates.slice(0, config.maxCandidatesPerKeyword ?? 80);
@@ -878,10 +1293,6 @@ async function crawlKeyword(tabId, keyword, config, stillNeedForTarget, skipNote
     // 限速补采正文，提升「需求 vs 广告」判断
     const enrichResult = await enrichCandidatesWithDetail(capped, config, keyword);
     capped = enrichResult.candidates;
-    const maxAge = config.maxAgeDays ?? 7;
-    const beforeAgeFilter = capped.length;
-    capped = filterLeadsByMaxAge(capped, maxAge);
-    const ageFilteredOut = beforeAgeFilter - capped.length;
     if (enrichResult.stoppedByCaptcha) {
       await touchRun({
         status: 'running',
@@ -891,18 +1302,6 @@ async function crawlKeyword(tabId, keyword, config, stillNeedForTarget, skipNote
           phase: 'detail_enrich_stopped',
           message: '详情补采遇验证码已停止，继续用现有文案做 AI',
           enriched: enrichResult.enriched,
-          ageFilteredOut,
-        },
-      });
-    } else if (ageFilteredOut > 0) {
-      await touchRun({
-        status: 'running',
-        currentKeyword: keyword,
-        lastProgress: {
-          keyword,
-          phase: 'age_filtered',
-          message: `详情补采后剔除 ${ageFilteredOut} 条超 ${maxAge} 天的笔记`,
-          ageFilteredOut,
         },
       });
     }
@@ -916,15 +1315,11 @@ async function crawlKeyword(tabId, keyword, config, stillNeedForTarget, skipNote
       minConfidence: config.aiMinConfidence ?? 0.45,
       softConfidence: config.aiSoftConfidence ?? 0.35,
       preferCount,
-      maxAgeDays: config.maxAgeDays ?? 7,
+      maxAgeDays: 0,
     });
   }
 
   if (leads.length) {
-    const maxAgeFinal = config.maxAgeDays ?? 7;
-    if (maxAgeFinal > 0) {
-      leads = filterLeadsByMaxAge(leads, maxAgeFinal);
-    }
     await upsertLeads(leads);
   }
 
@@ -1197,6 +1592,266 @@ async function runQueue(keywords, config) {
   }
 }
 
+const labState = {
+  tabId: null,
+  attached: false,
+  holding: false,
+  holdLoop: null,
+  holdX: 0,
+  holdY: 0,
+  stayX: 0,
+  stayY: 0,
+  dynamic: null,
+};
+
+function labSessionText() {
+  if (!labState.tabId) return '会话：未开始';
+  const bits = [`tab=${labState.tabId}`];
+  if (labState.attached) bits.push('已接管鼠标');
+  if (labState.holding) bits.push('正在悬停筛选区');
+  if (labState.dynamic?.newest) bits.push('已拿到最新坐标');
+  if (labState.dynamic?.week) bits.push('已拿到一周内坐标');
+  return `会话：${bits.join(' · ')}`;
+}
+
+async function labStopHold() {
+  labState.holding = false;
+  if (labState.holdLoop) {
+    try { await labState.holdLoop; } catch { /* ignore */ }
+    labState.holdLoop = null;
+  }
+}
+
+function labStartHold(tabId, x, y) {
+  labState.holdX = x;
+  labState.holdY = y;
+  if (labState.holding) return;
+  labState.holding = true;
+  labState.holdLoop = (async () => {
+    while (labState.holding && labState.tabId === tabId) {
+      try {
+        await cdpMove(tabId, labState.holdX, labState.holdY);
+      } catch {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  })();
+}
+
+async function labEndSession() {
+  await labStopHold();
+  if (labState.attached && labState.tabId) {
+    await detachDebugger(labState.tabId);
+  }
+  labState.tabId = null;
+  labState.attached = false;
+  labState.dynamic = null;
+  labState.stayX = 0;
+  labState.stayY = 0;
+}
+
+async function labEnsureSession() {
+  const found = await findXhsSearchTab();
+  if (!found.tab) {
+    return { ok: false, error: found.error || '请先打开小红书搜索结果页' };
+  }
+  const tabId = found.tab.id;
+  if (labState.tabId && labState.tabId !== tabId) {
+    await labEndSession();
+  }
+  labState.tabId = tabId;
+  try {
+    if (found.tab.windowId) await chrome.windows.update(found.tab.windowId, { focused: true });
+    await chrome.tabs.update(tabId, { active: true });
+  } catch {
+    // ignore
+  }
+  await ensureStateBridge(tabId);
+  await ensureContentScript(tabId);
+  if (!labState.attached) {
+    try {
+      await attachDebugger(tabId);
+      labState.attached = true;
+    } catch (error) {
+      return {
+        ok: false,
+        error: `无法模拟真实鼠标：${error?.message || error}。请关掉该页的 F12 后再试。`,
+      };
+    }
+  }
+  return { ok: true, tabId, url: found.tab.url };
+}
+
+async function labWaitPanel(tabId, timeoutMs) {
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: async (ms) => {
+      if (typeof window.__XHS_WAIT_PANEL__ !== 'function') {
+        return { error: '等待脚本未注入，请刷新小红书页面' };
+      }
+      const hit = await window.__XHS_WAIT_PANEL__(ms);
+      if (!hit?.newest) {
+        return { error: '抽屉没打开', debug: hit?.debug || {} };
+      }
+      return { ok: true, ...hit };
+    },
+    args: [timeoutMs],
+  });
+  return result;
+}
+
+async function runLabStep(step, payload = {}) {
+  if (step === 'endSession') {
+    await labEndSession();
+    return { ok: true, message: '会话已结束', session: labSessionText() };
+  }
+
+  if (step === 'openSearch') {
+    const keyword = payload.keyword || '美区influencer';
+    const url = buildSearchUrl(keyword);
+    let tabId = labState.tabId;
+    if (tabId) {
+      await chrome.tabs.update(tabId, { url, active: true });
+    } else {
+      const tab = await chrome.tabs.create({ url, active: true });
+      tabId = tab.id;
+    }
+    await waitForTabComplete(tabId, 30000);
+    await humanDelay(1200, 1800);
+    const ready = await labEnsureSession();
+    if (!ready.ok) return { ...ready, session: labSessionText() };
+    return { ok: true, message: `已打开搜索：${keyword}`, url, session: labSessionText() };
+  }
+
+  const ready = await labEnsureSession();
+  if (!ready.ok) return { ...ready, session: labSessionText() };
+  const tabId = labState.tabId;
+
+  if (step === 'openFilter') {
+    const probe = await probeFilter(tabId);
+    if (!probe?.filter) {
+      return { ok: false, error: '没找到「筛选」按钮', debug: probe, session: labSessionText() };
+    }
+    labState.stayX = probe.filter.x;
+    labState.stayY = probe.filter.y;
+    const alreadyOpen = Boolean(probe.drawerOpen && probe.newest);
+    labStartHold(tabId, labState.stayX, labState.stayY);
+    if (!alreadyOpen) {
+      await cdpMove(tabId, labState.stayX, labState.stayY);
+      await new Promise((r) => setTimeout(r, 300));
+      await cdpClickAt(tabId, labState.stayX, labState.stayY);
+    }
+    let dynamic = await labWaitPanel(tabId, 900);
+    if (!dynamic?.ok) {
+      await cdpClickAt(tabId, labState.stayX, labState.stayY);
+      dynamic = await labWaitPanel(tabId, 3500);
+    }
+    labState.dynamic = dynamic;
+    return {
+      ok: Boolean(dynamic?.ok && dynamic?.newest),
+      message: dynamic?.ok ? '筛选抽屉已打开，鼠标停在「筛选」上' : (dynamic?.error || '抽屉没保持打开'),
+      dynamic,
+      session: labSessionText(),
+    };
+  }
+
+  if (step === 'clickNewest') {
+    let newest = labState.dynamic?.newest;
+    if (!newest) {
+      const probe = await probeFilter(tabId);
+      newest = probe?.newest;
+      labState.dynamic = { ...(labState.dynamic || {}), ...probe };
+    }
+    if (!newest) {
+      return { ok: false, error: '没有「最新」坐标，请先点步骤 1', session: labSessionText() };
+    }
+    labStartHold(tabId, newest.x, newest.y);
+    await new Promise((r) => setTimeout(r, 180));
+    await cdpClickAt(tabId, newest.x, newest.y);
+    labState.holdX = newest.x;
+    labState.holdY = newest.y;
+    await new Promise((r) => setTimeout(r, 280));
+    const probe = await probeFilter(tabId);
+    return {
+      ok: true,
+      message: probe?.newestActive ? '「最新」已变红' : '已点「最新」，请看是否变红',
+      newestActive: Boolean(probe?.newestActive),
+      drawerOpen: Boolean(probe?.drawerOpen),
+      session: labSessionText(),
+    };
+  }
+
+  if (step === 'clickWeek') {
+    let week = labState.dynamic?.week;
+    if (!week) {
+      const probe = await probeFilter(tabId);
+      week = probe?.week;
+      labState.dynamic = { ...(labState.dynamic || {}), ...probe };
+    }
+    if (!week) {
+      return { ok: false, error: '没有「一周内」坐标，请先点步骤 1 和 2', session: labSessionText() };
+    }
+    labStartHold(tabId, week.x, week.y);
+    await new Promise((r) => setTimeout(r, 150));
+    await cdpClickAt(tabId, week.x, week.y);
+    labState.holdX = week.x;
+    labState.holdY = week.y;
+    await new Promise((r) => setTimeout(r, 280));
+    const probe = await probeFilter(tabId);
+    return {
+      ok: true,
+      message: probe?.weekActive ? '「一周内」已变红' : '已点「一周内」，请看是否变红',
+      weekActive: Boolean(probe?.weekActive),
+      newestActive: Boolean(probe?.newestActive),
+      drawerOpen: Boolean(probe?.drawerOpen),
+      session: labSessionText(),
+    };
+  }
+
+  if (step === 'leaveFilter') {
+    const fromX = labState.holdX || labState.stayX;
+    const fromY = labState.holdY || labState.stayY;
+    const leaveX = labState.dynamic?.panel
+      ? Math.max(80, labState.dynamic.panel.left - 80)
+      : Math.max(80, (labState.stayX || 400) - 220);
+    const leaveY = (labState.dynamic?.panel?.top || labState.stayY || 160) + 180;
+    await labStopHold();
+    await cdpSlideTo(tabId, fromX, fromY, leaveX, leaveY);
+    await new Promise((r) => setTimeout(r, 400));
+    const probe = await probeFilter(tabId);
+    return {
+      ok: true,
+      message: probe?.drawerOpen ? '鼠标已移出，但抽屉仍开着' : '鼠标已移出，抽屉已收',
+      drawerOpen: Boolean(probe?.drawerOpen),
+      session: labSessionText(),
+    };
+  }
+
+  if (step === 'scrollOnce') {
+    await ensureContentScript(tabId);
+    try {
+      const res = await chrome.tabs.sendMessage(tabId, { type: 'TEST_SCROLL_ONCE' });
+      return { ok: Boolean(res?.ok), ...res, session: labSessionText() };
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error), session: labSessionText() };
+    }
+  }
+
+  if (step === 'extractCards') {
+    await ensureContentScript(tabId);
+    try {
+      const res = await chrome.tabs.sendMessage(tabId, { type: 'TEST_EXTRACT_CARDS' });
+      return { ok: Boolean(res?.ok), ...res, session: labSessionText() };
+    } catch (error) {
+      return { ok: false, error: String(error?.message || error), session: labSessionText() };
+    }
+  }
+
+  return { ok: false, error: `未知步骤：${step}`, session: labSessionText() };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     if (message.type === 'INJECT_FILTER_MAIN') {
@@ -1222,6 +1877,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // 日产模式：默认不开自动收藏；目标以「符合」为准（收藏仅可选）
       config.dailyCapacityMode = true;
       config.autoCollect = config.autoCollect === true;
+      config.maxAgeDays = 0;
       config.targetCollectedCount = Number(config.targetCollectedCount)
         || Number(config.targetLeadCount)
         || DEFAULT_CONFIG.targetCollectedCount;
@@ -1338,6 +1994,43 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return;
     }
 
+    if (message.type === 'TEST_SORT_NEWEST') {
+      try {
+        const result = await withTimeout(
+          testSortNewest(),
+          28000,
+          '测试超时（28秒）。请到 chrome://extensions 重新加载扩展后再试',
+        );
+        sendResponse(result);
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          via: 'timeout',
+          reason: String(error?.message || error),
+          error: String(error?.message || error),
+        });
+      }
+      return;
+    }
+
+    if (message.type === 'TEST_LAB_STEP') {
+      try {
+        const result = await withTimeout(
+          runLabStep(message.payload?.step, message.payload || {}),
+          40000,
+          '测试步骤超时（40秒）',
+        );
+        sendResponse(result);
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: String(error?.message || error),
+          session: labSessionText(),
+        });
+      }
+      return;
+    }
+
     if (message.type === 'TEST_AI') {
       try {
         await testAiConnection({
@@ -1381,4 +2074,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
   if (!tab?.url?.includes('xiaohongshu.com')) return;
   ensureStateBridge(tabId).catch(() => {});
+});
+
+chrome.debugger.onDetach.addListener((source) => {
+  if (source?.tabId && source.tabId === labState.tabId) {
+    labState.attached = false;
+    labState.holding = false;
+  }
 });

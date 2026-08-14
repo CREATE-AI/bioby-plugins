@@ -1,7 +1,7 @@
 import { DEFAULT_CONFIG, DAILY_KEYWORD_MATRIX, DEFAULT_EXCLUDE_KEYWORDS } from '../lib/constants.js';
 import { getConfig, setConfig, getLeads, clearLeads, getRunState } from '../lib/storage.js';
 import { downloadReachHtml, normalizeLeadAuthor, resolvePublishDisplay, displayRedId } from '../lib/export.js';
-import { passesLeadMaxAge } from '../lib/publish-time.js';
+import { initLab } from '../lab/lab.js';
 
 const els = {
   useAiFilter: document.getElementById('useAiFilter'),
@@ -18,7 +18,6 @@ const els = {
   keywords: document.getElementById('keywords'),
   excludeKeywords: document.getElementById('excludeKeywords'),
   maxScrollRounds: document.getElementById('maxScrollRounds'),
-  maxAgeDays: document.getElementById('maxAgeDays'),
   maxCandidatesPerKeyword: document.getElementById('maxCandidatesPerKeyword'),
   targetLeadCount: document.getElementById('targetLeadCount'),
   targetCollectedCount: document.getElementById('targetCollectedCount'),
@@ -41,8 +40,17 @@ const els = {
 
 let activeTab = 'qualified';
 let cachedLeads = [];
-let cachedMaxAgeDays = DEFAULT_CONFIG.maxAgeDays ?? 7;
 const REACH_CURSOR_KEY = 'xhs_reach_cursor';
+
+(function showLoadedVersion() {
+  const el = document.getElementById('extVersion');
+  if (!el) return;
+  try {
+    el.textContent = `v${chrome.runtime.getManifest().version}`;
+  } catch {
+    el.textContent = 'v?';
+  }
+})();
 
 function linesToArray(value) {
   return String(value || '')
@@ -97,7 +105,7 @@ function readFormConfig() {
     keywords: linesToArray(els.keywords.value),
     excludeKeywords: linesToArray(els.excludeKeywords?.value),
     maxScrollRounds: Number(els.maxScrollRounds?.value) || DEFAULT_CONFIG.maxScrollRounds,
-    maxAgeDays: Number(els.maxAgeDays?.value ?? DEFAULT_CONFIG.maxAgeDays),
+    maxAgeDays: 0,
     maxCandidatesPerKeyword:
       Number(els.maxCandidatesPerKeyword?.value) || DEFAULT_CONFIG.maxCandidatesPerKeyword,
     targetCollectedCount: targetCollected,
@@ -139,7 +147,6 @@ function fillForm(config) {
   if (els.maxScrollRounds) {
     els.maxScrollRounds.value = config.maxScrollRounds || DEFAULT_CONFIG.maxScrollRounds;
   }
-  if (els.maxAgeDays) els.maxAgeDays.value = config.maxAgeDays ?? DEFAULT_CONFIG.maxAgeDays;
   if (els.maxCandidatesPerKeyword) {
     els.maxCandidatesPerKeyword.value =
       config.maxCandidatesPerKeyword || DEFAULT_CONFIG.maxCandidatesPerKeyword;
@@ -161,10 +168,6 @@ function filteredLeads(leads) {
   let list = activeTab === 'all'
     ? leads
     : leads.filter((l) => normalizeReviewStatus(l) === activeTab);
-  const maxAge = Number(cachedMaxAgeDays);
-  if (maxAge > 0) {
-    list = list.filter((l) => passesLeadMaxAge(l, maxAge));
-  }
   // 展示时再按发帖时间新→旧排一次，避免旧缓存顺序
   return [...list].sort((a, b) => {
     const ta = Date.parse(a.publishAt || '') || 0;
@@ -292,7 +295,7 @@ function renderLeads(leads, runState = null) {
         <span class="author-name">${name}</span>${idHint}
         · ${resolvePublishDisplay(lead) || '时间未知'} · ${lead.matchedKeyword || '-'}
       </div>
-      <div class="lead-meta">${lead.aiReason || lead.filterReason || ''}</div>
+      <div class="lead-meta">${lead.aiReason || lead.filterReason || '（无判定理由）'}</div>
       <div class="lead-actions">
         ${profile ? `<a class="btn-reach" href="${profile}" target="_blank" rel="noreferrer">开主页私信</a>` : ''}
         ${profile ? `<button type="button" class="btn-ok" data-copy="profile" data-url="${profile}">复制主页</button>` : ''}
@@ -356,8 +359,7 @@ document.querySelectorAll('.tab').forEach((btn) => {
 });
 
 async function refreshState() {
-  const [leads, state, config] = await Promise.all([getLeads(), getRunState(), getConfig()]);
-  cachedMaxAgeDays = Number(config?.maxAgeDays ?? DEFAULT_CONFIG.maxAgeDays ?? 7);
+  const [leads, state] = await Promise.all([getLeads(), getRunState()]);
   renderLeads(leads, state);
 
   const target = state.targetCollectedCount
@@ -379,11 +381,8 @@ async function refreshState() {
       els.progressText.textContent = `详情补采 ${p.enrichIndex || 0}/${p.enrichTotal || '?'} · ${state.currentKeyword || ''}`;
     } else if (p.phase === 'detail_enrich_stopped') {
       els.progressText.textContent = p.message || '详情补采遇验证码已停止';
-    } else if (p.phase === 'age_filtered' && p.message) {
-      els.progressText.textContent = p.message;
     } else if (p.phase === 'search_filters_done') {
-      const days = p.searchFilters?.maxAgeDays || cachedMaxAgeDays || 7;
-      els.progressText.textContent = p.message || `插件按近 ${days} 天过滤，开始滚动采集…`;
+      els.progressText.textContent = p.message || '筛选完成，开始滚动采集…';
     } else if (p.phase === 'search_filters' && p.message) {
       els.progressText.textContent = p.message;
     } else if (p.phase === 'search_filters_warning' && p.warning) {
@@ -391,8 +390,9 @@ async function refreshState() {
     } else if (p.phase === 'ai_judging') {
       els.progressText.textContent = `AI判定 ${p.judged || 0}/${p.totalCandidates || '?'} · ${state.currentKeyword || ''}`;
     } else if (p.phase === 'search_filters' || p.phase === 'sort_newest') {
-      const days = p.searchFilters?.maxAgeDays || cachedMaxAgeDays || 7;
-      els.progressText.textContent = p.message || `插件按近 ${days} 天过滤…`;
+      els.progressText.textContent = p.message || '正在点筛选「最新 + 一周内」…';
+    } else if (p.phase === 'reading') {
+      els.progressText.textContent = p.message || `正在读取首屏卡片 · ${state.currentKeyword || ''}`;
     } else if (p.phase === 'scrolling') {
       els.progressText.textContent = p.message || `正在滚动采集 · ${state.currentKeyword || ''}`;
     } else {
@@ -479,7 +479,6 @@ els.startBtn.addEventListener('click', async () => {
     alert(response?.error || '启动失败');
     return;
   }
-  alert('已开始采集。扩展弹窗会关闭，请看小红书页面顶部的黑色提示条，或再次点击扩展图标查看进度。');
   await refreshState();
 });
 
@@ -496,6 +495,42 @@ els.resetBtn.addEventListener('click', async () => {
   els.startBtn.disabled = false;
   els.stopBtn.disabled = true;
   await refreshState();
+});
+
+function formatNewestTestResult(res) {
+  if (!res) {
+    return [
+      '原因：后台没有返回结果',
+      '说明：多半是旧版还在模拟点击死循环。请打开 chrome://extensions/ 点「重新加载」。',
+    ].join('\n');
+  }
+  const reason = res.reason || res.error || res.message || '（未提供原因）';
+  const lines = [
+    `${res.ok ? '结果：成功' : '结果：失败'}`,
+    `原因：${reason}`,
+    `方式：${res.via || '未知'}`,
+  ];
+  if (res.newestActive != null) lines.push(`最新已选中：${res.newestActive ? '是' : '否'}`);
+  if (res.weekActive != null) lines.push(`一周内已选中：${res.weekActive ? '是' : '否'}`);
+  if (res.weekClicked != null) lines.push(`已点一周内：${res.weekClicked ? '是' : '否'}`);
+  if (res.debug) {
+    const d = typeof res.debug === 'string' ? res.debug : JSON.stringify(res.debug);
+    if (d.length < 400) lines.push(`调试：${d}`);
+  }
+  return lines.join('\n');
+}
+
+initLab();
+
+document.querySelectorAll('.view-tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const view = btn.dataset.view;
+    document.querySelectorAll('.view-tab').forEach((b) => {
+      b.classList.toggle('active', b === btn);
+    });
+    document.getElementById('viewCollect')?.classList.toggle('active', view === 'collect');
+    document.getElementById('viewLab')?.classList.toggle('active', view === 'lab');
+  });
 });
 
 els.copyProfilesBtn?.addEventListener('click', async () => {
@@ -620,9 +655,7 @@ chrome.runtime.onMessage.addListener((message) => {
   const needMigrate = saved.dailyCapacityMode !== true;
   const needExcludePreset = saved.excludePresetVersion !== 1;
   const needReachMode = saved.reachModeVersion !== 1;
-  // 旧默认 30 → 新默认 7；仅当仍是 30 且未做过该迁移时覆盖
-  const needMaxAgePreset = saved.maxAgePresetVersion !== 1
-    && (saved.maxAgeDays === undefined || Number(saved.maxAgeDays) === 30);
+  const needDisablePluginAge = saved.maxAgePresetVersion !== 2;
   const migrated = {
     ...DEFAULT_CONFIG,
     ...saved,
@@ -644,9 +677,9 @@ chrome.runtime.onMessage.addListener((message) => {
       autoCollect: false,
       reachModeVersion: 1,
     } : {}),
-    ...(needMaxAgePreset ? {
-      maxAgeDays: 7,
-      maxAgePresetVersion: 1,
+    ...(needDisablePluginAge ? {
+      maxAgeDays: 0,
+      maxAgePresetVersion: 2,
     } : {}),
   };
   fillForm(migrated);
@@ -657,7 +690,8 @@ chrome.runtime.onMessage.addListener((message) => {
     dailyCapacityMode: true,
     excludePresetVersion: 1,
     reachModeVersion: 1,
-    maxAgePresetVersion: 1,
+    maxAgePresetVersion: 2,
+    maxAgeDays: 0,
   });
   try {
     await chrome.runtime.sendMessage({ type: 'GET_RUN_STATE' });

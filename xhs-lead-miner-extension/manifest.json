@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "小红书线索挖掘助手",
-  "version": "1.11.24",
-  "description": "筛出近7天可私信线索：导出小红书号 + HTML 预览触达",
-  "permissions": ["storage", "tabs", "scripting", "alarms", "windows"],
+  "version": "1.12.31",
+  "description": "筛出可私信线索：导出小红书号 + HTML 预览触达",
+  "permissions": ["storage", "tabs", "scripting", "alarms", "windows", "sidePanel", "debugger"],
   "host_permissions": [
     "https://www.xiaohongshu.com/*",
     "https://edith.xiaohongshu.com/*",
@@ -15,8 +15,10 @@
   ],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
   "action": {
-    "default_popup": "popup/popup.html",
     "default_title": "小红书线索挖掘"
+  },
+  "side_panel": {
+    "default_path": "popup/popup.html"
   },
   "background": {
     "service_worker": "background/service-worker.js",

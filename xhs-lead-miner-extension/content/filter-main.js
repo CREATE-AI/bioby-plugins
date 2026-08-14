@@ -4,7 +4,7 @@
 (function initXhsFilterMain() {
   const CMD_ATTR = 'data-xhs-lead-filter-cmd';
   const RES_ATTR = 'data-xhs-lead-filter-res';
-  const VERSION = '1.11.24';
+  const VERSION = '1.12.31';
 
   function publishLabelCandidates(days) {
     const d = Number(days) || 7;
@@ -20,6 +20,14 @@
     if (d <= 7) return 'ONE_WEEK';
     if (d <= 183) return 'HALF_YEAR';
     return null;
+  }
+
+  function urlHasNewestSort() {
+    try {
+      return new URL(location.href).searchParams.get('sort') === 'time_descending';
+    } catch {
+      return false;
+    }
   }
 
   function urlFiltersMatch(days) {
@@ -218,6 +226,306 @@
 
     out.sort((a, b) => b.score - a.score);
     return out;
+  }
+
+  /** 和「全部 / 图文 / 视频 / 用户」同一行、靠右的「筛选」按钮 */
+  function findTabRowFilterButton() {
+    let allRect = null;
+    for (const el of document.querySelectorAll('span, div, button, a')) {
+      if (!vis(el)) continue;
+      if (norm(el) !== '全部') continue;
+      const r = el.getBoundingClientRect();
+      if (r.top < 60 || r.top > 280 || r.height > 56 || r.width > 120) continue;
+      allRect = r;
+      break;
+    }
+
+    let best = null;
+    let bestScore = -1;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const txt = (walker.currentNode.textContent || '').replace(/\s+/g, '').trim();
+      if (txt !== '筛选') continue;
+      let el = walker.currentNode.parentElement;
+      for (let i = 0; i < 6 && el; i += 1) {
+        const t = norm(el);
+        const isFilter = t === '筛选' || el.classList?.contains?.('filter');
+        if (!isFilter) {
+          el = el.parentElement;
+          continue;
+        }
+        const r = el.getBoundingClientRect();
+        if (!vis(el) || r.top < 40 || r.top > 320 || r.height > 80 || r.width > 220) {
+          el = el.parentElement;
+          continue;
+        }
+        let score = r.left + 800 - r.top;
+        if (allRect && Math.abs(r.top - allRect.top) < 40 && r.left > allRect.left) score += 9000;
+        if (r.left > window.innerWidth * 0.55) score += 2500;
+        if (score > bestScore) {
+          bestScore = score;
+          best = el;
+        }
+        break;
+      }
+    }
+    return best;
+  }
+
+  /** 筛选抽屉是否已展开（能看到「排序依据 / 最新 / 综合」） */
+  function filterDrawerOpen() {
+    const panel = findOpenFilterPanel() || findFilterPanelElement();
+    if (panel) {
+      const text = (panel.innerText || '').replace(/\s+/g, '');
+      if (/排序依据/.test(text) && /最新/.test(text) && /综合/.test(text)) return true;
+    }
+    if (findCollapse()) {
+      const box = upperProbe();
+      if (findCandidates('最新', box).length && findCandidates('综合', box).length) return true;
+    }
+    return false;
+  }
+
+  function rectOf(el) {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) return null;
+    return {
+      x: r.left + Math.min(r.width * 0.5, r.width - 2),
+      y: r.top + Math.min(r.height * 0.5, r.height - 2),
+      left: r.left,
+      top: r.top,
+      width: r.width,
+      height: r.height,
+    };
+  }
+
+  /**
+   * Cursor 实测：关掉筛选后 `.filter-panel` / `.tags` 会从 DOM 删除（v-if）。
+   * 必须先点 `div.filter`，再用 MutationObserver 等面板插入，再按文案找 chip。
+   */
+  function findFilterTrigger() {
+    const wrap = document.querySelector('div.filter');
+    if (!wrap) return null;
+    const span = [...wrap.querySelectorAll('span')].find((s) => {
+      const t = (s.innerText || '').replace(/\s+/g, '').trim();
+      return t === '筛选' || t === '已筛选';
+    });
+    if (span) return span;
+    return wrap;
+  }
+
+  function findFiltersPanel() {
+    const wrap = document.querySelector('div.filter');
+    const nested = wrap?.querySelector(':scope > .filter-panel') || wrap?.querySelector('.filter-panel');
+    if (nested && /最新/.test(nested.innerText || '')) return nested;
+    const panel = document.querySelector('.filter-panel');
+    if (panel && /最新/.test(panel.innerText || '')) return panel;
+    return null;
+  }
+
+  function chipText(el) {
+    return (el?.innerText || el?.textContent || '').replace(/\s+/g, '').trim();
+  }
+
+  function filterDebug() {
+    const wrap = document.querySelector('div.filter');
+    return {
+      hasWrap: Boolean(wrap),
+      filterClass: wrap?.className || '',
+      childCount: wrap?.childElementCount || 0,
+      children: wrap
+        ? [...wrap.children].map((c) => `${c.tagName}.${String(c.className || '').slice(0, 40)}`)
+        : [],
+      hasPanel: Boolean(document.querySelector('.filter-panel')),
+      tagCount: document.querySelectorAll('div.tags').length,
+    };
+  }
+
+  /**
+   * 每个选项有两份重复的 div.tags（Vue 双节点）。
+   * 只认文案完全等于 label 的 div.tags，优先红字/active，否则取最后一份（画在上面的）。
+   */
+  function findTagChip(label, root) {
+    const scope = root || findFiltersPanel();
+    if (!scope) return null;
+
+    const matched = [...scope.querySelectorAll('div.tags')].filter((el) => chipText(el) === label);
+    if (matched.length) {
+      const red = [...matched].reverse().find((el) => {
+        const c = getComputedStyle(el).color || '';
+        return /255,\s*36,\s*66/.test(c) || el.classList.contains('active');
+      });
+      return red || matched[matched.length - 1];
+    }
+
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const t = (walker.currentNode.textContent || '').replace(/\s+/g, '').trim();
+      if (t !== label) continue;
+      let el = walker.currentNode.parentElement;
+      for (let i = 0; i < 8 && el && scope.contains(el); i += 1) {
+        if (el.classList?.contains('tags')) return el;
+        el = el.parentElement;
+      }
+    }
+    return null;
+  }
+
+  function snapshotChips(panel) {
+    const newest = findTagChip('最新', panel);
+    if (!newest || !rectOf(newest)) return null;
+    const week = findTagChip('一周内', panel);
+    const pr = panel.getBoundingClientRect();
+    return {
+      newest: rectOf(newest),
+      week: rectOf(week),
+      newestActive: isTagActive(newest),
+      weekActive: isTagActive(week),
+      collapse: rectOf(findCollapse()),
+      panel: {
+        left: pr.left,
+        top: pr.top,
+        width: pr.width,
+        height: pr.height,
+        x: pr.left + Math.min(pr.width * 0.5, pr.width - 8),
+        y: pr.top + 28,
+      },
+    };
+  }
+
+  function waitForChipsInPanel(panel, timeoutMs) {
+    return new Promise((resolve) => {
+      const hit = snapshotChips(panel);
+      if (hit) {
+        resolve(hit);
+        return;
+      }
+      const obs = new MutationObserver(() => {
+        const next = snapshotChips(panel);
+        if (!next) return;
+        obs.disconnect();
+        resolve(next);
+      });
+      obs.observe(panel, { childList: true, subtree: true, characterData: true });
+      setTimeout(() => {
+        obs.disconnect();
+        resolve(snapshotChips(panel));
+      }, timeoutMs);
+    });
+  }
+
+  /**
+   * Cursor 实测：关掉后 .filter-panel 从 DOM 删除；点开时作为 div.filter 的
+   * 直接子节点一次性插入。必须先等这个节点，再在面板内部找「最新」。
+   * 不能对整页 subtree 观察 .tags（关闭时 Vue 会打出上千次补丁）。
+   */
+  function waitForDynamicFilterPanel(timeoutMs = 7000) {
+    return new Promise((resolve) => {
+      const done = (hit) => {
+        resolve({
+          ...(hit || {}),
+          debug: filterDebug(),
+        });
+      };
+
+      const existing = findFiltersPanel();
+      if (existing) {
+        waitForChipsInPanel(existing, Math.min(2500, timeoutMs)).then(done);
+        return;
+      }
+
+      const wrap = document.querySelector('div.filter');
+      if (!wrap) {
+        done(null);
+        return;
+      }
+
+      let finished = false;
+      const finish = (hit) => {
+        if (finished) return;
+        finished = true;
+        obs.disconnect();
+        clearTimeout(timer);
+        done(hit);
+      };
+
+      const obs = new MutationObserver((muts) => {
+        for (const m of muts) {
+          for (const n of m.addedNodes) {
+            if (n.nodeType !== 1) continue;
+            const panel = n.classList?.contains('filter-panel')
+              ? n
+              : n.querySelector?.('.filter-panel');
+            if (!panel) continue;
+            requestAnimationFrame(() => {
+              waitForChipsInPanel(panel, 2500).then(finish);
+            });
+            return;
+          }
+        }
+      });
+      obs.observe(wrap, { childList: true, subtree: false });
+      const timer = setTimeout(() => finish(snapshotChips(findFiltersPanel())), timeoutMs);
+    });
+  }
+
+  function beginWaitForDynamicFilterPanel(timeoutMs = 8000) {
+    window.__XHS_PANEL_WAIT_P__ = waitForDynamicFilterPanel(timeoutMs);
+    return { started: true, debug: filterDebug() };
+  }
+
+  function takeWaitForDynamicFilterPanel() {
+    const pending = window.__XHS_PANEL_WAIT_P__;
+    window.__XHS_PANEL_WAIT_P__ = null;
+    if (pending) return pending;
+    return waitForDynamicFilterPanel(800);
+  }
+
+  function isTagActive(el) {
+    if (!el) return false;
+    let n = el;
+    for (let i = 0; i < 4 && n; i += 1) {
+      if (n.classList?.contains('active')) return true;
+      const c = getComputedStyle(n).color || '';
+      if (/255,\s*36,\s*66/.test(c)) return true;
+      n = n.parentElement;
+    }
+    return false;
+  }
+
+  function probeFilterTargets() {
+    const trigger = findFilterTrigger();
+    const panel = findFiltersPanel();
+    const newest = findTagChip('最新', panel);
+    const week = findTagChip('一周内', panel);
+    const filter = rectOf(trigger);
+    const pr = panel?.getBoundingClientRect();
+    return {
+      version: VERSION,
+      drawerOpen: Boolean(panel && vis(panel)),
+      filter,
+      newest: rectOf(newest),
+      week: rectOf(week),
+      newestActive: isTagActive(newest),
+      weekActive: isTagActive(week),
+      collapse: rectOf(findCollapse()),
+      panel: pr && pr.width > 4
+        ? {
+          left: pr.left,
+          top: pr.top,
+          width: pr.width,
+          height: pr.height,
+          x: pr.left + Math.min(pr.width * 0.5, pr.width - 8),
+          y: pr.top + 28,
+        }
+        : null,
+      hoverPoint: filter
+        ? { x: filter.x, y: filter.y + 56 }
+        : { x: window.innerWidth - 80, y: 168 },
+      filterClass: document.querySelector('div.filter')?.className || '',
+      debug: getPanelDebug(),
+    };
   }
 
   /** 筛选展开后的面板容器 */
@@ -769,12 +1077,17 @@
   }
 
   async function openPanel() {
-    if (panelOpen()) return { ok: true, already: true };
+    if (filterDrawerOpen()) return { ok: true, already: true };
 
     window.scrollTo({ top: 0, behavior: 'auto' });
     await delay(350);
 
-    const triggers = findAllFilterTriggers();
+    const tabRow = findTabRowFilterButton();
+    const triggers = [];
+    if (tabRow) triggers.push({ el: tabRow, via: 'tab-row-筛选' });
+    for (const item of findAllFilterTriggers()) {
+      if (item.el !== tabRow) triggers.push(item);
+    }
     if (!triggers.length) {
       return { ok: false, error: '未找到筛选按钮', debug: getPanelDebug() };
     }
@@ -785,7 +1098,7 @@
           realClick(target);
         }
         await delay(450 + round * 80);
-        if (await waitPanelReady(2200)) {
+        if (filterDrawerOpen() || await waitPanelReady(2200)) {
           return { ok: true, clicked: true, tries: round + 1, via };
         }
       }
@@ -803,7 +1116,7 @@
           if (!/筛选/.test(ht) && !hit.classList?.contains?.('filter')) continue;
           realClick(hit);
           await delay(700);
-          if (await waitPanelReady(2000)) {
+          if (filterDrawerOpen() || await waitPanelReady(2000)) {
             return { ok: true, clicked: true, via: 'coords', tries: round + 1 };
           }
         }
@@ -975,19 +1288,83 @@
     }
   }
 
-  async function applyFilters(maxAgeDays = 7) {
-    const days = Number(maxAgeDays) || 7;
+  /** 测试：先点「筛选」打开抽屉，再点「最新」。面板保持打开方便肉眼确认 */
+  async function applyNewestSort() {
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    await delay(300);
 
+    const before = readFilterSelectionState();
+    showLeadStatus('线索助手：正在点击「筛选」…', 8000);
+
+    let openRes = { ok: true, already: true };
+    if (!filterDrawerOpen()) {
+      openRes = await openPanel();
+    }
+    if (!openRes.ok || !filterDrawerOpen()) {
+      showLeadStatus('线索助手：没点到「筛选」，面板未打开', 10000);
+      return {
+        ok: false,
+        via: 'filter_click_failed',
+        error: '未能点开「筛选」面板。请先停在搜索结果页，并确认右上角有「筛选」。',
+        before,
+        openRes,
+        debug: getPanelDebug(),
+        version: VERSION,
+      };
+    }
+
+    showLeadStatus('线索助手：筛选已打开，正在点「最新」…', 8000);
+    await delay(400);
+
+    const sec = findFilterSections();
+    let sortRes = await clickChipInSection(sec.sort, '最新', sec.panel);
+    if (!sortRes.ok) {
+      sortRes = await clickLabel('最新');
+    }
+    await delay(800);
+    const state = readFilterSelectionState();
+
+    if (state.sort === '最新' || sortRes.ok) {
+      showLeadStatus('线索助手：已先点「筛选」，再点「最新」', 10000);
+      return {
+        ok: true,
+        via: 'panel',
+        state,
+        before,
+        openRes,
+        sortRes,
+        urlSort: urlHasNewestSort(),
+        message: '已先点「筛选」，再点「最新」（面板保持打开，请看「最新」是否变红）',
+        version: VERSION,
+      };
+    }
+
+    showLeadStatus('线索助手：筛选已打开，但没点中「最新」', 10000);
+    return {
+      ok: false,
+      via: 'newest_click_failed',
+      error: '已打开筛选，但未能点中「最新」',
+      state,
+      before,
+      openRes,
+      sortRes,
+      urlSort: urlHasNewestSort(),
+      debug: getPanelDebug(),
+      version: VERSION,
+    };
+  }
+
+  async function applyFilters() {
     window.scrollTo({ top: 0, behavior: 'auto' });
     await delay(300);
     stripPlatformFilterParams();
 
-    showLeadStatus(`线索助手：不点小红书筛选，将按近 ${days} 天过滤`, 8000);
+    showLeadStatus('线索助手：不点小红书筛选，也不按发帖时间丢帖', 8000);
     return {
       ok: true,
       via: 'plugin_only',
-      maxAgeDays: days,
-      message: `插件按近 ${days} 天过滤（未使用小红书「最新+一周内」）`,
+      maxAgeDays: 0,
+      message: '未使用小红书「最新+一周内」，将不按发帖时间丢帖',
       version: VERSION,
     };
   }
@@ -1022,6 +1399,7 @@
     if (action === 'close') return closePanel();
     if (action === 'click') return clickLabel(label);
     if (action === 'apply') return applyFilters(maxAgeDays);
+    if (action === 'newest') return applyNewestSort();
     return { ok: false, error: `unknown action: ${action}` };
   }
 
@@ -1054,6 +1432,11 @@
 
   function publishApis() {
     window.__XHS_APPLY_FILTER__ = applyFilters;
+    window.__XHS_APPLY_NEWEST__ = applyNewestSort;
+    window.__XHS_PROBE_FILTER__ = probeFilterTargets;
+    window.__XHS_WAIT_PANEL__ = waitForDynamicFilterPanel;
+    window.__XHS_BEGIN_WAIT_PANEL__ = beginWaitForDynamicFilterPanel;
+    window.__XHS_TAKE_WAIT_PANEL__ = takeWaitForDynamicFilterPanel;
     window.__XHS_FILTER_PING__ = () => handleAction({ action: 'ping' });
     window.__XHS_READ_FILTER_STATE__ = (days = 7) => {
       const state = readFilterSelectionState(days);
