@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "小红书线索挖掘助手",
-  "version": "1.12.35",
+  "version": "1.12.36",
   "description": "筛出可私信线索：导出小红书号 + HTML 预览触达",
   "permissions": ["storage", "tabs", "scripting", "alarms", "windows", "sidePanel", "debugger"],
   "host_permissions": [

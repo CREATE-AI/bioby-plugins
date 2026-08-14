@@ -143,6 +143,13 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
+function displayNoteDesc(lead) {
+  const title = String(lead.title || '').replace(/\s+/g, ' ').trim();
+  const desc = String(lead.desc || '').replace(/\s+/g, ' ').trim();
+  if (!desc || desc === title) return '';
+  return desc.slice(0, 600);
+}
+
 function leadsToReachHtml(leads) {
   const rows = leads.map((raw) => {
     const lead = normalizeLeadAuthor(raw);
@@ -151,6 +158,7 @@ function leadsToReachHtml(leads) {
       ? `<img class="cover" src="${escapeHtml(lead.coverImageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" />`
       : '<span class="no-cover">无封面</span>';
     const title = String(lead.title || '').slice(0, 120);
+    const desc = displayNoteDesc(lead);
     const publishLocal = resolvePublishDisplay(raw) || '未知';
     // 导出时：不符合默认不勾「符合」；其余默认勾选
     const isOkDefault = lead.reviewStatus !== 'rejected';
@@ -166,6 +174,7 @@ function leadsToReachHtml(leads) {
   <td>${escapeHtml(lead.authorName)}</td>
   <td class="time">${escapeHtml(publishLocal)}</td>
   <td>${escapeHtml(title)}</td>
+  <td class="desc">${escapeHtml(desc) || '<span class="no-cover">无正文</span>'}</td>
   <td><a href="${escapeHtml(lead.noteUrl)}" target="_blank" rel="noopener">帖子</a></td>
   <td>${escapeHtml(lead.aiReason || lead.filterReason || '')}</td>
 </tr>`;
@@ -190,6 +199,7 @@ function leadsToReachHtml(leads) {
   .no-cover { color: #999; font-size: 12px; }
   .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
   .time { white-space: nowrap; color: #333; }
+  .desc { max-width: 360px; line-height: 1.45; color: #333; word-break: break-word; }
   .check { width: 72px; text-align: center; white-space: nowrap; }
   .chk { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; font-size: 11px; color: #555; user-select: none; }
   .chk input { width: 16px; height: 16px; cursor: pointer; }
@@ -225,6 +235,7 @@ function leadsToReachHtml(leads) {
         <th>昵称</th>
         <th>发帖时间</th>
         <th>标题</th>
+        <th>正文</th>
         <th>帖子</th>
         <th>判定理由</th>
       </tr>
