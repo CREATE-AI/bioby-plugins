@@ -95,6 +95,42 @@ export const DEFAULT_EXCLUDE_KEYWORDS = [
   '出海营销就找',
 ];
 
+export const XHS_FILTER_GROUPS = [
+  {
+    key: 'sort',
+    title: '排序依据',
+    labels: ['综合', '最新', '最多点赞', '最多评论', '最多收藏'],
+  },
+  {
+    key: 'noteType',
+    title: '笔记类型',
+    labels: ['不限', '视频', '图文'],
+  },
+  {
+    key: 'publishTime',
+    title: '发布时间',
+    labels: ['不限', '一天内', '一周内', '半年内'],
+  },
+  {
+    key: 'scope',
+    title: '搜索范围',
+    labels: ['不限', '已看过', '未看过', '已关注'],
+  },
+  {
+    key: 'distance',
+    title: '位置距离',
+    labels: ['不限', '同城', '附近'],
+  },
+];
+
+export const DEFAULT_XHS_FILTER_PRESET = {
+  sort: '最新',
+  noteType: '不限',
+  publishTime: '一周内',
+  scope: '不限',
+  distance: '不限',
+};
+
 export const DEFAULT_CONFIG = {
   /** 升级标记：首次加载日产模式会覆盖旧短词库 */
   dailyCapacityMode: true,

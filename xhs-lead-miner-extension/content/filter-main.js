@@ -4,7 +4,7 @@
 (function initXhsFilterMain() {
   const CMD_ATTR = 'data-xhs-lead-filter-cmd';
   const RES_ATTR = 'data-xhs-lead-filter-res';
-  const VERSION = '1.12.36';
+  const VERSION = '1.12.38';
 
   function publishLabelCandidates(days) {
     const d = Number(days) || 7;
@@ -372,6 +372,76 @@
     return null;
   }
 
+  function snapshotPresetChips(panel) {
+    const root = panel || findFiltersPanel();
+    if (!root) return {};
+    const tags = [];
+    const seen = new Map();
+    for (const el of root.querySelectorAll('div.tags')) {
+      const text = chipText(el);
+      const r = rectOf(el);
+      if (!text || !r) continue;
+      const key = `${text}@${Math.round(r.y / 6)}@${Math.round(r.x / 6)}`;
+      seen.set(key, {
+        text,
+        x: r.x,
+        y: r.y,
+        left: r.left,
+        top: r.top,
+        width: r.width,
+        height: r.height,
+        active: isTagActive(el),
+      });
+    }
+    tags.push(...seen.values());
+    tags.sort((a, b) => a.y - b.y || a.x - b.x);
+
+    const pick = (label) => tags.find((t) => t.text === label) || null;
+    const nearestUnlimited = (neighborText) => {
+      const neighbor = pick(neighborText);
+      if (!neighbor) return null;
+      const pool = tags.filter((t) => t.text === '不限');
+      if (!pool.length) return null;
+      return pool.slice().sort((a, b) => {
+        const da = Math.hypot(a.x - neighbor.x, a.y - neighbor.y);
+        const db = Math.hypot(b.x - neighbor.x, b.y - neighbor.y);
+        return da - db;
+      })[0];
+    };
+
+    return {
+      sort: {
+        综合: pick('综合'),
+        最新: pick('最新'),
+        最多点赞: pick('最多点赞'),
+        最多评论: pick('最多评论'),
+        最多收藏: pick('最多收藏'),
+      },
+      noteType: {
+        不限: nearestUnlimited('视频'),
+        视频: pick('视频'),
+        图文: pick('图文'),
+      },
+      publishTime: {
+        不限: nearestUnlimited('一天内') || nearestUnlimited('一周内'),
+        一天内: pick('一天内'),
+        一周内: pick('一周内'),
+        半年内: pick('半年内'),
+      },
+      scope: {
+        不限: nearestUnlimited('已看过'),
+        已看过: pick('已看过'),
+        未看过: pick('未看过'),
+        已关注: pick('已关注'),
+      },
+      distance: {
+        不限: nearestUnlimited('同城'),
+        同城: pick('同城'),
+        附近: pick('附近'),
+      },
+    };
+  }
+
   function snapshotChips(panel) {
     const newest = findTagChip('最新', panel);
     if (!newest || !rectOf(newest)) return null;
@@ -391,6 +461,7 @@
         x: pr.left + Math.min(pr.width * 0.5, pr.width - 8),
         y: pr.top + 28,
       },
+      presetChips: snapshotPresetChips(panel),
     };
   }
 
@@ -524,6 +595,7 @@
         ? { x: filter.x, y: filter.y + 56 }
         : { x: window.innerWidth - 80, y: 168 },
       filterClass: document.querySelector('div.filter')?.className || '',
+      chips: snapshotPresetChips(panel),
       debug: getPanelDebug(),
     };
   }

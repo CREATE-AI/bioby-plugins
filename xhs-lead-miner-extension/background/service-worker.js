@@ -1,4 +1,4 @@
-import { DEFAULT_CONFIG, STORAGE_KEYS } from '../lib/constants.js';
+import { DEFAULT_CONFIG, STORAGE_KEYS, XHS_FILTER_GROUPS, DEFAULT_XHS_FILTER_PRESET } from '../lib/constants.js';
 import { buildSearchUrl, humanDelay } from '../lib/human-behavior.js';
 import { upsertLeads, getConfig, setConfig, setRunState, getRunState, getLeads, updateLeadReview } from '../lib/storage.js';
 import { judgeLeadsWithAi, testAiConnection, chunkArray } from '../lib/ai-judge.js';
@@ -2176,6 +2176,42 @@ async function runLabDetailStep(step) {
   };
 }
 
+function normalizeLabFilterPreset(raw) {
+  const preset = { ...DEFAULT_XHS_FILTER_PRESET, ...(raw || {}) };
+  for (const group of XHS_FILTER_GROUPS) {
+    if (!group.labels.includes(preset[group.key])) {
+      preset[group.key] = DEFAULT_XHS_FILTER_PRESET[group.key];
+    }
+  }
+  return preset;
+}
+
+async function labEnsureDrawerOpen(tabId) {
+  const probe = await probeFilter(tabId);
+  if (!probe?.filter) {
+    return { ok: false, error: '没找到「筛选」按钮', debug: probe };
+  }
+  labState.stayX = probe.filter.x;
+  labState.stayY = probe.filter.y;
+  const alreadyOpen = Boolean(probe.drawerOpen && probe.newest);
+  labStartHold(tabId, labState.stayX, labState.stayY);
+  if (!alreadyOpen) {
+    await cdpMove(tabId, labState.stayX, labState.stayY);
+    await new Promise((r) => setTimeout(r, 300));
+    await cdpClickAt(tabId, labState.stayX, labState.stayY);
+  }
+  let dynamic = await labWaitPanel(tabId, 900);
+  if (!dynamic?.ok) {
+    await cdpClickAt(tabId, labState.stayX, labState.stayY);
+    dynamic = await labWaitPanel(tabId, 3500);
+  }
+  labState.dynamic = dynamic;
+  if (!dynamic?.ok || !dynamic?.newest) {
+    return { ok: false, error: dynamic?.error || '抽屉没保持打开', dynamic };
+  }
+  return { ok: true, dynamic };
+}
+
 async function runLabStep(step, payload = {}) {
   if (step === 'endSession') {
     await labEndSession();
@@ -2295,29 +2331,77 @@ async function runLabStep(step, payload = {}) {
   }
 
   if (step === 'openFilter') {
-    const probe = await probeFilter(tabId);
-    if (!probe?.filter) {
-      return { ok: false, error: '没找到「筛选」按钮', debug: probe, session: labSessionText() };
-    }
-    labState.stayX = probe.filter.x;
-    labState.stayY = probe.filter.y;
-    const alreadyOpen = Boolean(probe.drawerOpen && probe.newest);
-    labStartHold(tabId, labState.stayX, labState.stayY);
-    if (!alreadyOpen) {
-      await cdpMove(tabId, labState.stayX, labState.stayY);
-      await new Promise((r) => setTimeout(r, 300));
-      await cdpClickAt(tabId, labState.stayX, labState.stayY);
-    }
-    let dynamic = await labWaitPanel(tabId, 900);
-    if (!dynamic?.ok) {
-      await cdpClickAt(tabId, labState.stayX, labState.stayY);
-      dynamic = await labWaitPanel(tabId, 3500);
-    }
-    labState.dynamic = dynamic;
+    const opened = await labEnsureDrawerOpen(tabId);
     return {
-      ok: Boolean(dynamic?.ok && dynamic?.newest),
-      message: dynamic?.ok ? '筛选抽屉已打开，鼠标停在「筛选」上' : (dynamic?.error || '抽屉没保持打开'),
-      dynamic,
+      ...opened,
+      message: opened.ok ? '筛选抽屉已打开，鼠标停在「筛选」上' : opened.error,
+      session: labSessionText(),
+    };
+  }
+
+  if (step === 'applyPresetFilters') {
+    const preset = normalizeLabFilterPreset(payload.preset);
+    const opened = await labEnsureDrawerOpen(tabId);
+    if (!opened.ok) {
+      return { ...opened, preset, session: labSessionText() };
+    }
+
+    const chips = opened.dynamic?.presetChips || {};
+    const toClick = [];
+    for (const group of XHS_FILTER_GROUPS) {
+      const want = preset[group.key];
+      const chip = chips?.[group.key]?.[want];
+      if (!chip) {
+        toClick.push({ group: group.key, label: want, skip: true, error: '打开时没记到坐标' });
+        continue;
+      }
+      if (chip.active) {
+        toClick.push({ group: group.key, label: want, skip: true, already: true });
+        continue;
+      }
+      toClick.push({ group: group.key, label: want, chip });
+    }
+
+    await labStopHold();
+    let lastX = labState.stayX;
+    let lastY = labState.stayY;
+    const clicks = [];
+    for (const item of toClick) {
+      if (item.skip) {
+        clicks.push({
+          group: item.group,
+          label: item.label,
+          ok: Boolean(item.already),
+          already: item.already,
+          error: item.error,
+        });
+        continue;
+      }
+      const chip = item.chip;
+      await cdpMove(tabId, chip.x, chip.y);
+      await new Promise((r) => setTimeout(r, 180));
+      await cdpClickAt(tabId, chip.x, chip.y);
+      await keepMouseOnRight(tabId, chip.x, chip.y, 280);
+      lastX = chip.x;
+      lastY = chip.y;
+      clicks.push({ group: item.group, label: item.label, ok: true, clicked: true });
+    }
+
+    const leaveX = opened.dynamic?.panel
+      ? Math.max(80, opened.dynamic.panel.left - 80)
+      : Math.max(80, (labState.stayX || 400) - 220);
+    const leaveY = (opened.dynamic?.panel?.top || labState.stayY || 160) + 180;
+    await cdpSlideTo(tabId, lastX, lastY, leaveX, leaveY);
+    await new Promise((r) => setTimeout(r, 400));
+
+    const failed = clicks.filter((c) => !c.ok && !c.already);
+    return {
+      ok: failed.length === 0,
+      message: failed.length
+        ? `已按打开时记下的坐标点完，${failed.length} 项没坐标`
+        : '已按打开时记下的坐标点完筛选，鼠标已移出',
+      preset,
+      clicks,
       session: labSessionText(),
     };
   }
