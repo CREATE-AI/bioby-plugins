@@ -2,6 +2,8 @@ export const STORAGE_KEYS = {
   CONFIG: 'xhs_lead_config',
   LEADS: 'xhs_lead_leads',
   RUN_STATE: 'xhs_lead_run_state',
+  FILTER_PRESET: 'xhs_filter_preset',
+  LAB_FILTER_PRESET: 'xhs_lab_filter_preset',
 };
 
 /**
@@ -116,11 +118,6 @@ export const XHS_FILTER_GROUPS = [
     title: '搜索范围',
     labels: ['不限', '已看过', '未看过', '已关注'],
   },
-  {
-    key: 'distance',
-    title: '位置距离',
-    labels: ['不限', '同城', '附近'],
-  },
 ];
 
 export const DEFAULT_XHS_FILTER_PRESET = {
@@ -128,8 +125,36 @@ export const DEFAULT_XHS_FILTER_PRESET = {
   noteType: '不限',
   publishTime: '一周内',
   scope: '不限',
-  distance: '不限',
 };
+
+export function normalizeXhsFilterPreset(raw) {
+  const merged = { ...DEFAULT_XHS_FILTER_PRESET, ...(raw || {}) };
+  const preset = {};
+  for (const group of XHS_FILTER_GROUPS) {
+    preset[group.key] = group.labels.includes(merged[group.key])
+      ? merged[group.key]
+      : DEFAULT_XHS_FILTER_PRESET[group.key];
+  }
+  return preset;
+}
+
+export function xhsFilterPresetSummary(preset) {
+  const p = normalizeXhsFilterPreset(preset);
+  return XHS_FILTER_GROUPS
+    .map((group) => p[group.key])
+    .filter((label, index) => {
+      const key = XHS_FILTER_GROUPS[index].key;
+      return key === 'sort' || (label && label !== '不限');
+    })
+    .join(' + ');
+}
+
+export function publishTimeToMaxAgeDays(label) {
+  if (label === '一天内') return 1;
+  if (label === '一周内') return 7;
+  if (label === '半年内') return 183;
+  return 0;
+}
 
 export const DEFAULT_CONFIG = {
   /** 升级标记：首次加载日产模式会覆盖旧短词库 */

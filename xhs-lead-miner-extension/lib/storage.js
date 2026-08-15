@@ -1,4 +1,4 @@
-import { STORAGE_KEYS } from './constants.js';
+import { STORAGE_KEYS, normalizeXhsFilterPreset } from './constants.js';
 
 export async function setConfig(config) {
   await chrome.storage.local.set({ [STORAGE_KEYS.CONFIG]: config });
@@ -96,4 +96,30 @@ export async function getRunState() {
 
 export async function setRunState(state) {
   await chrome.storage.local.set({ [STORAGE_KEYS.RUN_STATE]: state });
+}
+
+export async function getFilterPreset() {
+  const result = await chrome.storage.local.get([
+    STORAGE_KEYS.FILTER_PRESET,
+    STORAGE_KEYS.LAB_FILTER_PRESET,
+  ]);
+  const raw = result[STORAGE_KEYS.FILTER_PRESET] || result[STORAGE_KEYS.LAB_FILTER_PRESET];
+  return raw ? normalizeXhsFilterPreset(raw) : null;
+}
+
+export async function setFilterPreset(preset) {
+  const next = normalizeXhsFilterPreset(preset);
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.FILTER_PRESET]: next,
+    [STORAGE_KEYS.LAB_FILTER_PRESET]: next,
+  });
+  return next;
+}
+
+export async function getLabFilterPreset() {
+  return getFilterPreset();
+}
+
+export async function setLabFilterPreset(preset) {
+  return setFilterPreset(preset);
 }

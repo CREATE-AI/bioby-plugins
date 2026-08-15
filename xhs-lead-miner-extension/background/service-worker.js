@@ -1,6 +1,14 @@
-import { DEFAULT_CONFIG, STORAGE_KEYS, XHS_FILTER_GROUPS, DEFAULT_XHS_FILTER_PRESET } from '../lib/constants.js';
+import {
+  DEFAULT_CONFIG,
+  STORAGE_KEYS,
+  XHS_FILTER_GROUPS,
+  DEFAULT_XHS_FILTER_PRESET,
+  normalizeXhsFilterPreset,
+  xhsFilterPresetSummary,
+  publishTimeToMaxAgeDays,
+} from '../lib/constants.js';
 import { buildSearchUrl, humanDelay } from '../lib/human-behavior.js';
-import { upsertLeads, getConfig, setConfig, setRunState, getRunState, getLeads, updateLeadReview } from '../lib/storage.js';
+import { upsertLeads, getConfig, setConfig, setRunState, getRunState, getLeads, updateLeadReview, getFilterPreset } from '../lib/storage.js';
 import { judgeLeadsWithAi, testAiConnection, chunkArray } from '../lib/ai-judge.js';
 import { classifyLeadMaxAge } from '../lib/age-filter.js';
 import { resolveLeadPublishAt } from '../lib/publish-time.js';
@@ -582,10 +590,54 @@ async function testSortNewest() {
       error: found.error || '没有找到小红书搜索结果页',
     };
   }
-  return applyPlatformNewestFilterOnTab(found.tab.id);
+  return applyPlatformNewestFilterOnTab(found.tab.id, DEFAULT_XHS_FILTER_PRESET);
 }
 
-async function applyPlatformNewestFilterOnTab(tabId) {
+async function clickPresetChipsOnPanel(tabId, dynamic, presetRaw) {
+  const preset = normalizeXhsFilterPreset(presetRaw);
+  const chips = dynamic?.presetChips || {};
+  const toClick = [];
+  for (const group of XHS_FILTER_GROUPS) {
+    const want = preset[group.key];
+    const chip = chips?.[group.key]?.[want];
+    if (!chip) {
+      toClick.push({ group: group.key, label: want, skip: true, error: '打开时没记到坐标' });
+      continue;
+    }
+    if (chip.active) {
+      toClick.push({ group: group.key, label: want, skip: true, already: true });
+      continue;
+    }
+    toClick.push({ group: group.key, label: want, chip });
+  }
+
+  let lastX = dynamic?.newest?.x || 0;
+  let lastY = dynamic?.newest?.y || 0;
+  const clicks = [];
+  for (const item of toClick) {
+    if (item.skip) {
+      clicks.push({
+        group: item.group,
+        label: item.label,
+        ok: Boolean(item.already),
+        already: item.already,
+        error: item.error,
+      });
+      continue;
+    }
+    const chip = item.chip;
+    await cdpMove(tabId, chip.x, chip.y);
+    await new Promise((r) => setTimeout(r, 180));
+    await cdpClickAt(tabId, chip.x, chip.y);
+    await keepMouseOnRight(tabId, chip.x, chip.y, 480);
+    lastX = chip.x;
+    lastY = chip.y;
+    clicks.push({ group: item.group, label: item.label, ok: true, clicked: true });
+  }
+  return { preset, clicks, lastX, lastY };
+}
+
+async function applyPlatformNewestFilterOnTab(tabId, presetRaw) {
   try {
     const tab = await chrome.tabs.get(tabId);
     if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
@@ -692,56 +744,35 @@ async function applyPlatformNewestFilterOnTab(tabId) {
       };
     }
 
-    await new Promise((r) => setTimeout(r, 180));
-    await cdpMove(tabId, dynamic.newest.x, dynamic.newest.y);
-    await new Promise((r) => setTimeout(r, 200));
-    await cdpClickAt(tabId, dynamic.newest.x, dynamic.newest.y);
-    await keepMouseOnRight(tabId, dynamic.newest.x, dynamic.newest.y, 280);
-
-    // 点完「最新」立刻点「一周内」，用抽屉刚打开时记下的坐标，不要先 probe（抽屉一收就丢）。
-    let week = dynamic.week;
-    if (!week) {
-      probe = await probeFilter(tabId);
-      week = probe?.week;
-    }
-    let weekClicked = false;
-    if (!week) {
-      return {
-        ok: false,
-        clicked: true,
-        via: 'no_week',
-        reason: '已点「最新」，但没找到「一周内」坐标。',
-        newestActive: Boolean((await probeFilter(tabId))?.newestActive),
-        weekActive: false,
-        weekClicked: false,
-      };
-    }
-    await new Promise((r) => setTimeout(r, 150));
-    await cdpMove(tabId, week.x, week.y);
-    await new Promise((r) => setTimeout(r, 180));
-    await cdpClickAt(tabId, week.x, week.y);
-    await keepMouseOnRight(tabId, week.x, week.y, 280);
-    weekClicked = true;
+    const clicked = await clickPresetChipsOnPanel(tabId, dynamic, presetRaw);
+    const failed = clicked.clicks.filter((c) => !c.ok && !c.already);
+    const summary = xhsFilterPresetSummary(clicked.preset);
 
     // 抽屉靠悬停撑着：鼠标移出筛选区域就会收，不用点「收起」。
     const leaveX = dynamic.panel
       ? Math.max(80, dynamic.panel.left - 80)
       : Math.max(80, stayX - 220);
     const leaveY = (dynamic.panel?.top || stayY) + 180;
-    await cdpSlideTo(tabId, week.x, week.y, leaveX, leaveY);
+    await cdpSlideTo(tabId, clicked.lastX || stayX, clicked.lastY || stayY, leaveX, leaveY);
     await new Promise((r) => setTimeout(r, 400));
 
     probe = await probeFilter(tabId);
     const drawerClosed = !probe?.drawerOpen;
     return {
-      ok: weekClicked,
+      ok: failed.length === 0,
       clicked: true,
       via: 'cdp_click',
-      reason: `已点「最新」和「一周内」，鼠标已移出筛选区。抽屉${drawerClosed ? '已收' : '仍开着'}。`,
-      message: drawerClosed ? '最新 + 一周内已选中，筛选已收起' : '已点最新和一周内并移开鼠标，请看筛选是否收起',
-      newestActive: Boolean(probe?.newestActive) || weekClicked,
-      weekActive: Boolean(probe?.weekActive) || weekClicked,
-      weekClicked,
+      preset: clicked.preset,
+      clicks: clicked.clicks,
+      reason: failed.length
+        ? `已按打开时记下的坐标点筛选「${summary}」，${failed.length} 项没坐标`
+        : `已点筛选「${summary}」，鼠标已移出筛选区。抽屉${drawerClosed ? '已收' : '仍开着'}。`,
+      message: failed.length
+        ? `筛选「${summary}」有 ${failed.length} 项没点到`
+        : `已选中「${summary}」${drawerClosed ? '，筛选已收起' : ''}`,
+      newestActive: Boolean(probe?.newestActive) || clicked.preset.sort === '最新',
+      weekActive: Boolean(probe?.weekActive) || clicked.preset.publishTime === '一周内',
+      weekClicked: clicked.clicks.some((c) => c.group === 'publishTime' && (c.clicked || c.already)),
       drawerOpen: Boolean(probe?.drawerOpen),
       filterClass: probe?.filterClass,
     };
@@ -750,23 +781,29 @@ async function applyPlatformNewestFilterOnTab(tabId) {
   }
 }
 
-async function applySearchFiltersOnTab(tabId, maxAgeDays = 7) {
-  const days = Number(maxAgeDays) || 7;
+async function applySearchFiltersOnTab(tabId, presetRaw) {
+  const preset = normalizeXhsFilterPreset(presetRaw);
+  const summary = xhsFilterPresetSummary(preset);
+  const days = publishTimeToMaxAgeDays(preset.publishTime);
   await focusTabForFilter(tabId);
   await ensureStateBridge(tabId);
 
-  const ui = await applyPlatformNewestFilterOnTab(tabId);
-  const applied = Boolean(ui?.clicked || ui?.newestActive || ui?.weekActive);
+  const ui = await applyPlatformNewestFilterOnTab(tabId, preset);
+  const applied = Boolean(ui?.clicked || ui?.ok);
   if (applied) {
-    const fresh = await waitForFilterResultsFresh(tabId, days, 12000);
+    const fresh = days > 0
+      ? await waitForFilterResultsFresh(tabId, days, 12000)
+      : { skipped: true };
     return {
       ok: true,
       via: ui.via || 'cdp_click',
+      preset,
+      summary,
       maxAgeDays: days,
       newestActive: Boolean(ui.newestActive),
       weekActive: Boolean(ui.weekActive),
       fresh,
-      message: `已点筛选「最新」${ui.weekActive ? ' + 「一周内」' : ''}，开始采集`,
+      message: `已点筛选「${summary}」，开始采集`,
       ui,
     };
   }
@@ -774,6 +811,8 @@ async function applySearchFiltersOnTab(tabId, maxAgeDays = 7) {
   return {
     ok: true,
     via: 'plugin_only',
+    preset,
+    summary,
     maxAgeDays: days,
     newestActive: false,
     weekActive: false,
@@ -1239,13 +1278,15 @@ async function collectLeads(leads, config) {
 
 async function crawlKeyword(tabId, keyword, config, stillNeedForTarget, skipNoteIds = []) {
   const url = buildSearchUrl(keyword);
+  const preset = normalizeXhsFilterPreset(config.xhsFilterPreset);
+  const summary = xhsFilterPresetSummary(preset);
 
   await touchRun({
     status: 'running',
     currentKeyword: keyword,
-    lastProgress: { keyword, phase: 'search_filters', message: `正在打开搜索页，点筛选「最新 + 一周内」…` },
+    lastProgress: { keyword, phase: 'search_filters', message: `正在打开搜索页，点筛选「${summary}」…` },
   });
-  await notifyTabStatus(tabId, `线索助手：打开搜索页，点筛选「最新 + 一周内」…`, 12000);
+  await notifyTabStatus(tabId, `线索助手：打开搜索页，点筛选「${summary}」…`, 12000);
 
   // 每次都带筛选参数刷新
   await chrome.tabs.update(tabId, { url, active: true });
@@ -1254,7 +1295,7 @@ async function crawlKeyword(tabId, keyword, config, stillNeedForTarget, skipNote
   await ensureContentScript(tabId);
   await waitForSearchPageReady(tabId);
 
-  const searchFilters = await applySearchFiltersOnTab(tabId, 7);
+  const searchFilters = await applySearchFiltersOnTab(tabId, preset);
   await notifyTabStatus(
     tabId,
     searchFilters.message || '线索助手：已处理搜索筛选',
@@ -2177,13 +2218,7 @@ async function runLabDetailStep(step) {
 }
 
 function normalizeLabFilterPreset(raw) {
-  const preset = { ...DEFAULT_XHS_FILTER_PRESET, ...(raw || {}) };
-  for (const group of XHS_FILTER_GROUPS) {
-    if (!group.labels.includes(preset[group.key])) {
-      preset[group.key] = DEFAULT_XHS_FILTER_PRESET[group.key];
-    }
-  }
-  return preset;
+  return normalizeXhsFilterPreset(raw);
 }
 
 async function labEnsureDrawerOpen(tabId) {
@@ -2346,46 +2381,11 @@ async function runLabStep(step, payload = {}) {
       return { ...opened, preset, session: labSessionText() };
     }
 
-    const chips = opened.dynamic?.presetChips || {};
-    const toClick = [];
-    for (const group of XHS_FILTER_GROUPS) {
-      const want = preset[group.key];
-      const chip = chips?.[group.key]?.[want];
-      if (!chip) {
-        toClick.push({ group: group.key, label: want, skip: true, error: '打开时没记到坐标' });
-        continue;
-      }
-      if (chip.active) {
-        toClick.push({ group: group.key, label: want, skip: true, already: true });
-        continue;
-      }
-      toClick.push({ group: group.key, label: want, chip });
-    }
-
     await labStopHold();
-    let lastX = labState.stayX;
-    let lastY = labState.stayY;
-    const clicks = [];
-    for (const item of toClick) {
-      if (item.skip) {
-        clicks.push({
-          group: item.group,
-          label: item.label,
-          ok: Boolean(item.already),
-          already: item.already,
-          error: item.error,
-        });
-        continue;
-      }
-      const chip = item.chip;
-      await cdpMove(tabId, chip.x, chip.y);
-      await new Promise((r) => setTimeout(r, 180));
-      await cdpClickAt(tabId, chip.x, chip.y);
-      await keepMouseOnRight(tabId, chip.x, chip.y, 280);
-      lastX = chip.x;
-      lastY = chip.y;
-      clicks.push({ group: item.group, label: item.label, ok: true, clicked: true });
-    }
+    const clicked = await clickPresetChipsOnPanel(tabId, opened.dynamic, preset);
+    const lastX = clicked.lastX || labState.stayX;
+    const lastY = clicked.lastY || labState.stayY;
+    const clicks = clicked.clicks;
 
     const leaveX = opened.dynamic?.panel
       ? Math.max(80, opened.dynamic.panel.left - 80)
@@ -2529,6 +2529,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       config.dailyCapacityMode = true;
       config.autoCollect = config.autoCollect === true;
       config.maxAgeDays = 0;
+      config.xhsFilterPreset = normalizeXhsFilterPreset(
+        config.xhsFilterPreset || (await getFilterPreset()) || DEFAULT_XHS_FILTER_PRESET,
+      );
       config.targetCollectedCount = Number(config.targetCollectedCount)
         || Number(config.targetLeadCount)
         || DEFAULT_CONFIG.targetCollectedCount;

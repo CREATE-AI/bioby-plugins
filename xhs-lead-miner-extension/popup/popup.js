@@ -1,6 +1,14 @@
 import { DEFAULT_CONFIG, DAILY_KEYWORD_MATRIX, DEFAULT_EXCLUDE_KEYWORDS } from '../lib/constants.js';
 import { getConfig, setConfig, getLeads, clearLeads, getRunState } from '../lib/storage.js';
 import { downloadReachHtml, normalizeLeadAuthor, resolvePublishDisplay, displayRedId } from '../lib/export.js';
+import {
+  getSharedFilterPreset,
+  loadSavedFilterPreset,
+  mountFilterPresetCopy,
+  mountFilterSaveHint,
+  resetSharedFilterPreset,
+  saveSharedFilterPreset,
+} from '../lib/filter-preset-ui.js';
 import { initLab } from '../lab/lab.js';
 
 const els = {
@@ -111,6 +119,7 @@ function readFormConfig() {
     targetCollectedCount: targetCollected,
     targetLeadCount: targetCollected,
     sortByTime: true,
+    xhsFilterPreset: getSharedFilterPreset(),
   };
 }
 
@@ -390,7 +399,7 @@ async function refreshState() {
     } else if (p.phase === 'ai_judging') {
       els.progressText.textContent = `AI判定 ${p.judged || 0}/${p.totalCandidates || '?'} · ${state.currentKeyword || ''}`;
     } else if (p.phase === 'search_filters' || p.phase === 'sort_newest') {
-      els.progressText.textContent = p.message || '正在点筛选「最新 + 一周内」…';
+      els.progressText.textContent = p.message || '正在点平台筛选…';
     } else if (p.phase === 'reading') {
       els.progressText.textContent = p.message || `正在读取首屏卡片 · ${state.currentKeyword || ''}`;
     } else if (p.phase === 'scrolling') {
@@ -464,6 +473,7 @@ els.startBtn.addEventListener('click', async () => {
     alert('请至少填一个关键词（可多行）');
     return;
   }
+  await saveSharedFilterPreset();
   await setConfig(config);
   try {
     await chrome.permissions.request({ origins: ['https://api.deepseek.com/*'] });
@@ -519,6 +529,18 @@ function formatNewestTestResult(res) {
   }
   return lines.join('\n');
 }
+
+mountFilterPresetCopy(document.getElementById('collectFilterCopy'));
+mountFilterPresetCopy(document.getElementById('labFilterCopy'));
+mountFilterSaveHint(document.getElementById('collectFilterSaveHint'));
+mountFilterSaveHint(document.getElementById('labFilterSaveHint'));
+
+document.getElementById('collectFilterResetBtn')?.addEventListener('click', () => {
+  resetSharedFilterPreset();
+});
+document.getElementById('collectFilterSaveBtn')?.addEventListener('click', async () => {
+  await saveSharedFilterPreset();
+});
 
 initLab();
 
@@ -650,6 +672,7 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 (async function init() {
+  await loadSavedFilterPreset();
   const saved = (await getConfig()) || {};
   // 首次升级到日产模式：覆盖旧短词库与旧目标
   const needMigrate = saved.dailyCapacityMode !== true;

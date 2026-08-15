@@ -434,11 +434,6 @@
         未看过: pick('未看过'),
         已关注: pick('已关注'),
       },
-      distance: {
-        不限: nearestUnlimited('同城'),
-        同城: pick('同城'),
-        附近: pick('附近'),
-      },
     };
   }
 

@@ -9,7 +9,7 @@
 <body>
   <header>
     <h1>小红书线索挖掘 <span id="extVersion" class="version">v?</span></h1>
-    <p class="subtitle">点筛选最新 + 一周内 → 筛符合 → 打开主页私信</p>
+    <p class="subtitle">按保存的平台筛选点选项 → 筛符合 → 打开主页私信</p>
   </header>
 
   <nav class="tabs view-tabs">
@@ -46,8 +46,18 @@
           <input id="targetCollectedCount" type="number" min="5" max="50" value="15" />
         </label>
       </div>
-      <div class="hint">时间交给小红书筛选「最新 + 一周内」。插件不再按发帖时间丢帖（搜索卡经常解析不到时间）。</div>
+      <div class="hint">时间交给小红书平台筛选。插件不再按发帖时间丢帖（搜索卡经常解析不到时间）。</div>
       <input id="targetLeadCount" type="hidden" value="15" />
+
+      <details class="advanced lab-filter-fold" open>
+        <summary>平台筛选</summary>
+        <div id="collectFilterCopy" class="xhs-filter-copy"></div>
+        <div class="actions" style="margin-top:8px">
+          <button id="collectFilterResetBtn" type="button" class="ghost">重置默认</button>
+          <button id="collectFilterSaveBtn" type="button" class="ghost">保存方案</button>
+        </div>
+        <div id="collectFilterSaveHint" class="hint" style="margin-top:8px">尚未保存方案</div>
+      </details>
 
       <details class="advanced">
         <summary>高级选项（一般不用改）</summary>
@@ -138,12 +148,16 @@
     </section>
 
     <section class="panel">
-      <div class="hint" style="margin-bottom:8px">筛选预设（仅测试，主采集仍是最新 + 一周内）</div>
-      <div id="labFilterCopy" class="xhs-filter-copy"></div>
-      <div class="actions" style="margin-top:8px">
-        <button id="labFilterResetBtn" class="ghost">重置默认</button>
-        <button id="applyPresetFilterBtn" class="primary">按预设点筛选</button>
-      </div>
+      <details class="advanced lab-filter-fold" open>
+        <summary>筛选预设（与采集页共用一套方案）</summary>
+        <div id="labFilterCopy" class="xhs-filter-copy"></div>
+        <div class="actions" style="margin-top:8px">
+          <button id="labFilterResetBtn" class="ghost">重置默认</button>
+          <button id="labFilterSaveBtn" class="ghost">保存方案</button>
+          <button id="applyPresetFilterBtn" class="primary">按预设点筛选</button>
+        </div>
+        <div id="labFilterSaveHint" class="hint" style="margin-top:8px">尚未保存方案</div>
+      </details>
     </section>
 
     <section class="panel">
