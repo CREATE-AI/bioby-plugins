@@ -1,8 +1,33 @@
 /**
  * x.com content script：填话术 / 半自动发送 / 会话抓取
+ *
+ * 只处理 background 经 tabs.sendMessage 发来的类型。
+ * 侧栏/popup 的 runtime.sendMessage 会广播到本脚本；若 return true 却不 sendResponse，
+ * Chrome 会报 “message channel closed before a response was received”。
  */
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (!msg || !msg.type) return;
+const CONTENT_MESSAGE_TYPES = new Set([
+  'INJECT_DM_DRAFT',
+  'AUTO_SEND_DM',
+  'ENSURE_PASSCODE',
+  'SCRAPE_INBOX_BATCH',
+  'SCRAPE_CURRENT_THREAD'
+]);
+
+function isFromSidepanelOrPopup(sender) {
+  return /\/(sidepanel|popup|options)\.html/i.test(String(sender?.url || ''));
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || !msg.type || !CONTENT_MESSAGE_TYPES.has(msg.type)) return;
+  if (isFromSidepanelOrPopup(sender)) return;
+
+  let replied = false;
+  const reply = (payload) => {
+    if (replied) return;
+    replied = true;
+    try { sendResponse(payload); } catch (_) { /* channel already closed */ }
+  };
+
   (async () => {
     try {
       if (msg.type === 'INJECT_DM_DRAFT') {
@@ -12,37 +37,35 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         showToast(filled
           ? 'Bioby：话术已填入输入框'
           : 'Bioby：话术已复制，请打开私信后粘贴');
-        sendResponse({ ok: true, filled });
+        reply({ ok: true, filled });
         return;
       }
       if (msg.type === 'AUTO_SEND_DM') {
-        const result = await autoSendDm(msg);
-        sendResponse(result);
+        reply(await autoSendDm(msg));
         return;
       }
       if (msg.type === 'ENSURE_PASSCODE') {
-        // 空字符串仅作 ping；有值才尝试解锁
         if (!msg.passcode) {
-          sendResponse({ ok: true, ping: true, gate: XDom.isPasscodeGate() });
+          reply({ ok: true, ping: true, gate: XDom.isPasscodeGate() });
           return;
         }
         const r = await XDom.tryUnlockPasscode(msg.passcode);
-        sendResponse({ ok: r.unlocked, ...r });
+        reply({ ok: r.unlocked, ...r });
         return;
       }
       if (msg.type === 'SCRAPE_INBOX_BATCH') {
-        const result = await scrapeInboxBatch(msg);
-        sendResponse(result);
+        reply(await scrapeInboxBatch(msg));
         return;
       }
       if (msg.type === 'SCRAPE_CURRENT_THREAD') {
-        const screenName = guessCurrentScreenName();
-        const messages = XDom.scrapeVisibleMessages();
-        sendResponse({ ok: true, screenName, messages });
-        return;
+        reply({
+          ok: true,
+          screenName: guessCurrentScreenName(),
+          messages: XDom.scrapeVisibleMessages()
+        });
       }
     } catch (e) {
-      sendResponse({ ok: false, reason: 'SEND_FAILED', error: e.message || String(e) });
+      reply({ ok: false, reason: 'SEND_FAILED', error: e.message || String(e) });
     }
   })();
   return true;
@@ -200,9 +223,14 @@ async function scrapeInboxBatch(msg) {
     await XDom.waitFor(() => XDom.parseScreenNameFromOpenConversation(), { timeout: 3500, interval: 120 });
     const screenName = XDom.parseScreenNameFromOpenConversation()
       || guessCurrentScreenName();
-    const scraped = await XDom.scrapeConversationMessagesWithRetry({ attempts: 2, scrollWait: 200 });
+    const scraped = await XDom.scrapeConversationMessagesWithRetry({ attempts: 12, scrollWait: 220 });
     const previewMsgs = XDom.parsePreviewMessages(t.preview);
-    const messages = XDom.mergeMessageLists(scraped, previewMsgs);
+    let messages = scraped.length ? scraped : XDom.mergeMessageLists(scraped, previewMsgs);
+    if (!messages.length) {
+      await XDom.sleep(600);
+      const retry = await XDom.scrapeConversationMessagesWithRetry({ attempts: 8, scrollWait: 280 });
+      messages = retry.length ? retry : XDom.mergeMessageLists(retry, previewMsgs);
+    }
     threads.push({
       screenName,
       messages,

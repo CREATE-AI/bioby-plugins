@@ -32,28 +32,43 @@
       <button type="button" id="captureBtn" class="primary">收录（IN 自动抽报价）</button>
     </section>
 
-    <footer>人工点击发送 · 不自动群发</footer>
+    <footer>人工点击发送 · 不自动群发 · <span data-ext-version></span></footer>
   </div>
 
   <!-- 设置：账号密码登录，自动保存 JWT -->
   <div id="viewSettings" class="hidden">
     <header class="settings-header">
       <button type="button" id="backToMain" class="back-btn" title="返回">← 返回</button>
-      <div class="brand">设置</div>
+      <div class="brand">设置 <span data-ext-version></span></div>
       <span class="spacer"></span>
     </header>
 
     <section class="settings-body">
-      <p class="hint">使用 CRM 账号登录后，扩展会自动保存 Token，无需手动复制。</p>
+      <p class="hint">登录 CRM 后自动保存 Token。选测试服务器连线上 CRM，选本地连本机。活动名与 CRM 列表一致，输入关键字即可筛选。</p>
 
-      <label for="apiBase">API Base URL</label>
-      <input id="apiBase" type="url" placeholder="http://localhost:8080" autocomplete="off" />
+      <label>连接环境</label>
+      <div class="seg" id="apiEnvSeg" role="group" aria-label="连接环境">
+        <button type="button" class="seg-btn active" data-api-env="test">测试服务器</button>
+        <button type="button" class="seg-btn" data-api-env="local">本地环境</button>
+      </div>
+      <p class="hint">切换环境后需重新登录（Token 不能跨环境使用）。</p>
 
-      <label for="campaignId">Campaign ID（活动 ID）</label>
-      <input id="campaignId" type="text" placeholder="活动 ID" autocomplete="off" />
+      <label for="campaignName">活动名称</label>
+      <div class="campaign-picker">
+        <input id="campaignName" type="text" placeholder="登录后输入关键字搜索活动" autocomplete="off" disabled />
+        <ul id="campaignSuggest" class="campaign-suggest hidden" role="listbox"></ul>
+      </div>
+      <p id="campaignSelectedHint" class="hint">登录后可搜索并选择活动。</p>
+      <input id="campaignId" type="hidden" value="" />
 
-      <label for="businessAccount">当前商务号标识</label>
-      <input id="businessAccount" type="text" placeholder="如 biz_small / biz_big" autocomplete="off" />
+      <label>插件角色</label>
+      <select id="pluginRole">
+        <option value="small">小号</option>
+        <option value="big">系统数据库</option>
+      </select>
+
+      <label for="businessAccount">个人ID</label>
+      <input id="businessAccount" type="text" placeholder="如 small-xihahu" autocomplete="off" />
 
       <label for="username">账号（用户名）</label>
       <input id="username" type="text" placeholder="CRM 登录用户名" autocomplete="username" />

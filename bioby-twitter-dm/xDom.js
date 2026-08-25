@@ -570,36 +570,107 @@ const XDom = (() => {
     return false;
   }
 
-  function pushScrapedMessage(messages, node, textEl) {
+  function extractXMessageId(row, textEl) {
+    const fromTid = (el) => {
+      const id = el?.getAttribute?.('data-testid') || '';
+      if (id.startsWith('message-text-')) return id.slice('message-text-'.length);
+      if (id.startsWith('message-') && !id.startsWith('message-text-') && id !== 'messageEntry') {
+        return id.slice('message-'.length);
+      }
+      return '';
+    };
+    return fromTid(row) || fromTid(textEl) || '';
+  }
+
+  function normalizeMachineTime(raw) {
+    const value = String(raw || '').trim();
+    if (!value) return null;
+    if (/^\d{10,13}$/.test(value)) {
+      const ms = value.length <= 10 ? Number(value) * 1000 : Number(value);
+      const date = new Date(ms);
+      return Number.isNaN(date.getTime()) ? null : date.toISOString();
+    }
+    // 只接收带日期的机器时间；不把孤立的 “3:40 AM” 猜成今天。
+    if (!/[T/]|\d{4}|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec/i.test(value)) {
+      return null;
+    }
+    const ms = Date.parse(value);
+    return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+  }
+
+  function extractSentAt(row) {
+    if (!row) return null;
+    let el = row;
+    for (let i = 0; i < 8 && el; i += 1) {
+      const candidates = [];
+      const collect = (node) => {
+        if (!node?.getAttribute) return;
+        candidates.push(
+          node.getAttribute('datetime'),
+          node.getAttribute('data-time'),
+          node.getAttribute('data-timestamp'),
+          node.getAttribute('data-created-at'),
+          node.getAttribute('title'),
+          node.getAttribute('aria-label')
+        );
+      };
+      collect(el);
+      for (const node of el.querySelectorAll?.(
+        'time, [datetime], [data-time], [data-timestamp], [data-created-at]'
+      ) || []) {
+        collect(node);
+      }
+      for (const candidate of candidates) {
+        const normalized = normalizeMachineTime(candidate);
+        if (normalized) return normalized;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  function messageIdentityKey(m, fallbackIndex) {
+    if (m?.xMessageId) return `id:${m.xMessageId}`;
+    return `dom:${fallbackIndex}:${m?.direction || ''}:${m?.text || ''}`;
+  }
+
+  function pushScrapedMessage(messages, node, textEl, domIndex) {
     const text = stripMessageTimestamps((textEl?.innerText || textEl?.textContent || '').trim());
     if (isNoiseMessageText(text)) return;
     const row = resolveBubbleRow(node || textEl);
     messages.push({
       direction: inferMessageDirection(row),
-      text: text.slice(0, 2000)
+      text: text.slice(0, 2000),
+      xMessageId: extractXMessageId(row, textEl) || undefined,
+      sentAt: extractSentAt(row) || undefined,
+      domIndex: domIndex ?? messages.length
     });
   }
 
   function scrapeVisibleMessages() {
     const messages = [];
     const root = messageListRoot() || document;
-    const seenText = new Set();
+    const seenId = new Set();
 
     const pushOnce = (node, textEl) => {
-      const text = stripMessageTimestamps((textEl?.innerText || textEl?.textContent || '').trim());
-      if (isNoiseMessageText(text) || seenText.has(text)) return;
-      seenText.add(text);
-      pushScrapedMessage(messages, node, textEl);
+      const before = messages.length;
+      pushScrapedMessage(messages, node, textEl, before);
+      if (messages.length === before) return;
+      const added = messages[messages.length - 1];
+      const key = messageIdentityKey(added, added.domIndex);
+      if (seenId.has(key)) {
+        messages.pop();
+        return;
+      }
+      seenId.add(key);
     };
 
-    // 新版 /i/chat：message-text-{uuid}（手动短消息常只出现在这里）
     const textNodes = [...root.querySelectorAll('[data-testid^="message-text-"]')];
     for (const textEl of textNodes) {
       const row = resolveBubbleRow(textEl);
       pushOnce(row, textEl);
     }
 
-    // message-{uuid} 容器（补漏：无独立 message-text 时）
     const modernNodes = [...root.querySelectorAll('[data-testid^="message-"]')]
       .filter((el) => {
         const id = el.getAttribute('data-testid') || '';
@@ -613,7 +684,6 @@ const XDom = (() => {
       pushOnce(node, textEl || node);
     }
 
-    // 经典 DM UI
     const classicNodes = [
       ...root.querySelectorAll('[data-testid="messageEntry"]'),
       ...root.querySelectorAll('[data-testid="tweet"]')
@@ -625,38 +695,41 @@ const XDom = (() => {
       pushOnce(node, textEl);
     }
 
-    return preferDirectionOnDedupe(messages);
+    return sortMessagesBySentAt(messages);
   }
 
-  /**
-   * 同文只保留一条。You: 预览强制 OUT；无预览且方向冲突时宁可 IN（利于抽报价，避免再误标 OUT）。
-   */
-  function preferDirectionOnDedupe(messages) {
-    const byText = new Map();
-    for (const m of messages) {
+  function sentAtMs(m) {
+    if (!m?.sentAt) return null;
+    const t = Date.parse(m.sentAt);
+    return Number.isNaN(t) ? null : t;
+  }
+
+  function sortMessagesBySentAt(messages) {
+    const list = [...(messages || [])];
+    list.sort((a, b) => {
+      const at = sentAtMs(a);
+      const bt = sentAtMs(b);
+      if (at != null && bt != null && at !== bt) return at - bt;
+      if (at != null && bt == null) return -1;
+      if (at == null && bt != null) return 1;
+      return (a.domIndex ?? 0) - (b.domIndex ?? 0);
+    });
+    return list;
+  }
+
+  function mergeByIdentity(primary, secondary) {
+    const out = [];
+    const seen = new Set();
+    for (const m of [...(primary || []), ...(secondary || [])]) {
       if (!m?.text) continue;
-      const prev = byText.get(m.text);
-      if (!prev) {
-        byText.set(m.text, m);
-        continue;
-      }
-      if (m.fromPreview && m.direction === 'OUT') {
-        byText.set(m.text, m);
-        continue;
-      }
-      if (prev.fromPreview && prev.direction === 'OUT') continue;
-      if (prev.direction !== m.direction) {
-        if (m.direction === 'IN') byText.set(m.text, m);
-      }
+      const key = messageIdentityKey(m, out.length);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(m);
     }
-    return [...byText.values()];
+    return sortMessagesBySentAt(out);
   }
 
-  function dedupeMessages(messages) {
-    return preferDirectionOnDedupe(messages);
-  }
-
-  /** 收件箱侧栏 preview 行：仅 You: / 你: → OUT（对方预览绝不当 OUT） */
   function parsePreviewMessages(preview) {
     if (!preview || !preview.length) return [];
     const out = [];
@@ -675,48 +748,81 @@ const XDom = (() => {
   }
 
   function mergeMessageLists(primary, secondary) {
-    return preferDirectionOnDedupe([...(primary || []), ...(secondary || [])]);
+    return mergeByIdentity(primary, secondary);
   }
 
-  /** 打开会话后滚动并抓取；有预览回退时不必多轮死等 */
-  async function scrapeConversationMessagesWithRetry({ attempts = 2, scrollWait = 200 } = {}) {
+  /** 向上滚动加载历史后按 sentAt 升序返回 */
+  async function scrapeConversationMessagesWithRetry({ attempts = 12, scrollWait = 220 } = {}) {
     const scroller = messageScrollerEl();
-    let best = [];
+    const byKey = new Map();
+    const harvest = () => {
+      const batch = scrapeVisibleMessages();
+      for (const m of batch) {
+        const key = messageIdentityKey(m, byKey.size);
+        const prev = byKey.get(key);
+        if (!prev) {
+          byKey.set(key, m);
+        } else if (!prev.sentAt && m.sentAt) {
+          byKey.set(key, m);
+        }
+      }
+    };
+
+    harvest();
+    let prevCount = byKey.size;
+    let stagnant = 0;
     for (let i = 0; i < attempts; i += 1) {
       if (scroller) {
-        scroller.scrollTop = scroller.scrollHeight;
+        scroller.scrollTop = 0;
         await sleep(scrollWait);
       } else {
         await sleep(scrollWait);
       }
-      await waitFor(
-        () => scrapeVisibleMessages().length > 0
-          || document.querySelector('[data-testid^="message-text-"]')
-          || document.querySelector('[data-testid="messageEntry"]'),
-        { timeout: 1200, interval: 120 }
-      );
-      const batch = scrapeVisibleMessages();
-      if (batch.length > best.length) best = batch;
-      if (batch.length > 0) break;
+      harvest();
+      if (byKey.size <= prevCount) {
+        stagnant += 1;
+        if (stagnant >= 3) break;
+      } else {
+        stagnant = 0;
+        prevCount = byKey.size;
+      }
     }
-    return best;
+    return sortMessagesBySentAt([...byKey.values()]);
   }
 
   function parseScreenNameFromOpenConversation() {
-    const scope = document.querySelector('[data-testid="dm-conversation-panel"]')
+    const panel = document.querySelector('[data-testid="dm-conversation-panel"]')
       || document.querySelector('[data-testid="dm-conversation-content"]')
       || document;
-    const links = [...scope.querySelectorAll('a[href]')];
+    const header = panel.querySelector('[data-testid="dm-conversation-header"]')
+      || panel.querySelector('[data-testid="conversationHeader"]')
+      || panel.querySelector('header')
+      || null;
+
+    const fromHeader = screenNameFromScope(header || panel, true);
+    if (fromHeader) return fromHeader;
+    return screenNameFromScope(panel, true);
+  }
+
+  function screenNameFromScope(root, skipMessageList) {
+    if (!root) return null;
+    const links = [...root.querySelectorAll('a[href]')];
     for (const a of links) {
+      if (skipMessageList && a.closest('[data-testid="dm-message-list"]')) continue;
       const href = a.getAttribute('href') || '';
       const m = href.match(/(?:x\.com|twitter\.com)\/([A-Za-z0-9_]{1,15})(?:[\/?#]|$)/i)
         || href.match(/^\/([A-Za-z0-9_]{1,15})(?:[\/?#]|$)/);
-      if (m && !/^(i|home|messages|search|settings|compose|explore)$/i.test(m[1])) {
-        return m[1].toLowerCase();
-      }
+      if (!m) continue;
+      const sn = m[1];
+      if (/^(i|home|messages|search|settings|compose|explore|intent|share)$/i.test(sn)) continue;
+      return sn.toLowerCase();
     }
-    const atEl = [...scope.querySelectorAll('*')].find((el) => /^@[A-Za-z0-9_]{1,15}$/.test((el.innerText || '').trim()));
-    if (atEl) return atEl.innerText.trim().slice(1).toLowerCase();
+    const nodes = [...root.querySelectorAll('span, a, div')];
+    for (const el of nodes) {
+      if (skipMessageList && el.closest('[data-testid="dm-message-list"]')) continue;
+      const t = (el.innerText || '').trim();
+      if (/^@[A-Za-z0-9_]{1,15}$/.test(t)) return t.slice(1).toLowerCase();
+    }
     return null;
   }
 

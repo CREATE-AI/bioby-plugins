@@ -246,6 +246,73 @@ footer {
   margin-top: 14px;
 }
 
+.seg {
+  display: flex;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 3px;
+}
+.seg-btn {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.seg-btn.active {
+  background: #1e2732;
+  color: var(--text);
+}
+
+.campaign-picker {
+  position: relative;
+}
+.campaign-suggest {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 20;
+}
+.campaign-suggest li {
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.campaign-suggest li:hover,
+.campaign-suggest li.active {
+  background: #1e2732;
+}
+.campaign-suggest .sub {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.campaign-suggest .empty {
+  color: var(--muted);
+  cursor: default;
+}
+#campaignName:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 #settingsStatus {
   margin: 12px 0 0;
 }
