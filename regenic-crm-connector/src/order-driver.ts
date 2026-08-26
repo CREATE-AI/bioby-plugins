@@ -1,0 +1,221 @@
+import {
+  ChannelDriverError,
+  requireConnectorStream,
+  type ChannelDriver,
+  type ConnectorInstallation,
+  type ConversationThread,
+  type JsonValue,
+  type NewConnectorInstallation,
+} from "@regenic/domain";
+import type { Host } from "@regenic/plugin-host";
+import {
+  CRM_BASE_URL_ENV,
+  crmClientFromEnv,
+  crmHasToken,
+  DEFAULT_MAX_OPEN_ORDER_REVIEWS,
+  mapCrmError,
+  type CrmFetch,
+} from "./crm-client";
+import {
+  CRM_SOURCE,
+  crmScopeOf,
+  isOrderTarget,
+  ORDER_CONNECTOR_TYPE,
+  orderStreamKey,
+} from "./locators";
+import { crmOrderReviewPlugin } from "./plugin";
+import { answerOrderPrompt, listOrderPrompts } from "./prompts";
+import { orderConversationLabel } from "./records";
+
+export const crmOrderReviewDriver: ChannelDriver = {
+  connector_type: ORDER_CONNECTOR_TYPE,
+  source: CRM_SOURCE,
+
+  install(input): NewConnectorInstallation {
+    return {
+      id: input.id,
+      org_id: input.org_id,
+      connector_type: ORDER_CONNECTOR_TYPE,
+      status: "enabled",
+      config: orderInstallConfig(input.config),
+      created_at: input.now,
+    };
+  },
+
+  matchesThread(installation, thread) {
+    return (
+      installation.status === "enabled" &&
+      thread.source === CRM_SOURCE &&
+      isOrderTarget(thread.target)
+    );
+  },
+
+  ownsThread(installation, thread) {
+    return this.matchesThread(installation, thread);
+  },
+
+  capabilities(installation) {
+    if (installation.status !== "enabled") {
+      return { sync: false, reply: false, create: false };
+    }
+    return {
+      sync: true,
+      reply: false,
+      create: false,
+      list_title: "conversation",
+      prompts: true,
+    };
+  },
+
+  canReply() {
+    return false;
+  },
+
+  async createThread() {
+    throw new ChannelDriverError(
+      "unsupported_channel",
+      "Creating a CRM order is not available",
+    );
+  },
+
+  async resolveStreams(installation, host, env) {
+    return [await mountOrderStream(host, installation, env)];
+  },
+
+  async resolveThreadStream(installation, _thread, host, env) {
+    return mountOrderStream(host, installation, env);
+  },
+
+  async bindEgress() {
+    throw new ChannelDriverError(
+      "unsupported_channel",
+      "CRM order review must go through answerPrompt, not egress",
+    );
+  },
+
+  outboundId(thread: ConversationThread) {
+    return `${thread.target}:out:local`;
+  },
+
+  async probeCatalog({ env }) {
+    const ready = Boolean(env[CRM_BASE_URL_ENV]?.trim());
+    return {
+      services: {
+        "crm-connector": {
+          ready: true,
+          hint: "Private CRM connector is loaded.",
+        },
+        crm: {
+          ready,
+          hint: ready ? undefined : `Set ${CRM_BASE_URL_ENV}`,
+        },
+      },
+    };
+  },
+
+  async resolveConversationLabels(installation, threads, env) {
+    const labels = new Map<string, string>();
+    const wanted = threads.filter(
+      (thread) => this.ownsThread(installation, thread),
+    );
+    if (wanted.length === 0) {
+      return labels;
+    }
+    try {
+      const client = crmClientFromEnv({ env });
+      await Promise.all(
+        wanted.map(async (thread) => {
+          const orderId = thread.target.slice("order:".length);
+          try {
+            const order = await client.getOrder(orderId);
+            labels.set(`${CRM_SOURCE}:${thread.target}`, orderConversationLabel(order));
+          } catch {
+            // A lookup failure must not block inbox.
+          }
+        }),
+      );
+    } catch {
+      return labels;
+    }
+    return labels;
+  },
+
+  async listPrompts(installation, thread, _host, env) {
+    if (!this.capabilities(installation).prompts) {
+      return [];
+    }
+    try {
+      return await listOrderPrompts(crmClientFromEnv({ env }), thread.target);
+    } catch (error) {
+      mapCrmError(error, "sync");
+    }
+  },
+
+  async answerPrompt(installation, thread, answer, _host, env) {
+    if (!this.capabilities(installation).prompts) {
+      throw new ChannelDriverError(
+        "unsupported_channel",
+        "This CRM order installation cannot answer a prompt",
+      );
+    }
+    try {
+      return await answerOrderPrompt(
+        crmClientFromEnv({ env }),
+        thread.target,
+        answer,
+      );
+    } catch (error) {
+      mapCrmError(error, "send");
+    }
+  },
+};
+
+export function orderInstallConfig(
+  config: Record<string, unknown>,
+): Record<string, JsonValue> {
+  const max =
+    configNumber(config, "max_open_order_reviews") ?? DEFAULT_MAX_OPEN_ORDER_REVIEWS;
+  if (!Number.isInteger(max) || max < 1) {
+    throw new ChannelDriverError(
+      "invalid_config",
+      "max_open_order_reviews must be a positive integer",
+    );
+  }
+  return { max_open_order_reviews: String(max) };
+}
+
+export async function mountOrderStream(
+  host: Host,
+  installation: ConnectorInstallation,
+  env: NodeJS.ProcessEnv,
+  extras: { fetch?: CrmFetch; now?: () => string } = {},
+) {
+  const scope = crmScopeOf(crmHasToken(env));
+  const streamKey = orderStreamKey(scope);
+  if (!host.get("connectors").getStream(installation.id, streamKey)) {
+    await host.plugin(crmOrderReviewPlugin, {
+      installation_id: installation.id,
+      org_id: installation.org_id,
+      max_open_order_reviews: configNumber(installation.config, "max_open_order_reviews"),
+      env,
+      fetch: extras.fetch,
+      now: extras.now,
+    });
+  }
+  return requireConnectorStream(host.get("connectors"), installation.id, streamKey);
+}
+
+function configNumber(
+  config: Record<string, unknown>,
+  name: string,
+): number | undefined {
+  const value = config[name];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}

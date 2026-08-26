@@ -1,0 +1,27 @@
+{
+  "name": "@bioby/regenic-crm-connector",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "link:regenic": "node scripts/link-regenic.cjs",
+    "build": "node scripts/link-regenic.cjs && tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.cjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@regenic/domain": "file:../../regenic/packages/domain",
+    "@regenic/plugin-host": "file:../../regenic/packages/plugin-host"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
