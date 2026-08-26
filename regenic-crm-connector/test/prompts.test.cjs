@@ -51,6 +51,33 @@ describe("CRM prompts", () => {
     );
   });
 
+  it("rejects complete when reviewGuide allowedActions is an empty list", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(
+        200,
+        sampleOpsTask({
+          reviewGuide: { allowedActions: [] },
+        }),
+      ),
+    });
+    await assert.rejects(
+      () =>
+        answerOpsPrompt(
+          new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+          "ops_task:task-1",
+          {
+            prompt_id: "crm:ops:task-1",
+            answers: [{ id: "decision", selected: ["CLOSE_TASK"] }],
+          },
+        ),
+      (error) => error instanceof ChannelDriverError,
+    );
+    assert.equal(
+      fetch.calls.some((call) => call.method === "POST"),
+      false,
+    );
+  });
+
   it("rejects a continue action when reviewGuide only allows close", async () => {
     const fetch = createFetch({
       "GET /internal/regenic/ops-tasks/task-1": jsonResponse(

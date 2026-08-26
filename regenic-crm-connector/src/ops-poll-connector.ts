@@ -14,6 +14,7 @@ import {
   parseSeenCursor,
   reconcileRecords,
   revisionOf,
+  selectOpenWindow,
   toPollResult,
 } from "./reconcile";
 
@@ -54,11 +55,8 @@ export class CrmOpsPollConnector {
       }
       throw error;
     }
-    const live = listed.slice(0, this.maxOpen);
-    const liveIds = new Set(live.map((task) => task.id));
-    const disappeared = await this.confirmGone(
-      Object.keys(seen).filter((id) => !liveIds.has(id)),
-    );
+    const { live, maybeGone } = selectOpenWindow(listed, seen, this.maxOpen);
+    const disappeared = await this.confirmGone(maybeGone);
     const reconciled = reconcileRecords({
       seen,
       live: live.map((task) => {

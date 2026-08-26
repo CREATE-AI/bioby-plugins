@@ -58,6 +58,39 @@ export function formatSeenCursor(
   return JSON.stringify(cursor);
 }
 
+export function selectOpenWindow<T extends { id: string }>(
+  listed: T[],
+  seen: Record<string, string>,
+  maxOpen: number,
+): { live: T[]; maybeGone: string[] } {
+  const listedById = new Map<string, T>();
+  for (const item of listed) {
+    listedById.set(item.id, item);
+  }
+  const maybeGone: string[] = [];
+  const stillOpen: T[] = [];
+  for (const id of Object.keys(seen)) {
+    const item = listedById.get(id);
+    if (item) {
+      stillOpen.push(item);
+    } else {
+      maybeGone.push(id);
+    }
+  }
+  const room = Math.max(0, maxOpen - stillOpen.length);
+  const newcomers: T[] = [];
+  for (const item of listed) {
+    if (seen[item.id] !== undefined) {
+      continue;
+    }
+    if (newcomers.length >= room) {
+      break;
+    }
+    newcomers.push(item);
+  }
+  return { live: [...stillOpen, ...newcomers], maybeGone };
+}
+
 export function reconcileRecords(input: {
   seen: Record<string, string>;
   live: LiveReconcileItem[];

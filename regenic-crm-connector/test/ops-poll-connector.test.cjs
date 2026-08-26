@@ -75,29 +75,40 @@ describe("CrmOpsPollConnector", () => {
     assert.equal(operations["ops_task:task-2:task"], "tombstone");
   });
 
-  it("does not tombstone a still-pending task that missed the max_open page", async () => {
+  it("revises seen pending tasks even when they miss the max_open window", async () => {
     const cursor = {
       value: formatSeenCursor("all", { "task-1": "old", "task-2": "old" }),
     };
     const { connector, fetch } = createConnector(
       {
         "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
-          items: [sampleOpsTask({ id: "task-2" }), sampleOpsTask({ id: "task-1" })],
+          items: [
+            sampleOpsTask({ id: "task-2" }),
+            sampleOpsTask({ id: "task-1", nextAction: "STILL_NEED_REVIEW" }),
+            sampleOpsTask({ id: "task-3" }),
+          ],
         }),
-        "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
       },
       { max_open_tasks: 1 },
     );
     const result = await connector.poll(cursor);
+    const operations = Object.fromEntries(
+      result.batch.records.map((record) => [record.external_id, record.operation]),
+    );
+    assert.equal(operations["ops_task:task-1:task"], "revise");
+    assert.equal(operations["ops_task:task-2:task"], "revise");
+    assert.equal(operations["ops_task:task-3:task"], undefined);
     assert.equal(
       result.batch.records.some((record) => record.operation === "tombstone"),
       false,
     );
     assert.equal(
       fetch.calls.some((call) => call.pathname === "/internal/regenic/ops-tasks/task-1"),
-      true,
+      false,
     );
     assert.match(result.next_cursor, /"task-1"/);
+    assert.match(result.next_cursor, /"task-2"/);
+    assert.equal(result.next_cursor.includes("task-3"), false);
   });
 
   it("drops the seen set when token scope changes", async () => {

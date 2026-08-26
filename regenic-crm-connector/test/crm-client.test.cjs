@@ -99,6 +99,48 @@ describe("CrmClient", () => {
     assert.equal(fetch.calls[0].pathname, "/api/internal/regenic/pending-ops-tasks");
   });
 
+  it("does not invent APPROVE_AND_CONTINUE when CRM omits allowedActions", async () => {
+    const task = sampleOpsTask();
+    delete task.reviewGuide.allowedActions;
+    const fetch = createFetch({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, { items: [task] }),
+    });
+    const client = new CrmClient({ baseUrl: "https://crm.internal", fetch });
+    assert.deepEqual((await client.listPendingOpsTasks())[0].reviewGuide.allowedActions, [
+      "CLOSE_TASK",
+    ]);
+  });
+
+  it("keeps an explicit empty allowedActions list empty", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [sampleOpsTask({ reviewGuide: { allowedActions: [] } })],
+      }),
+    });
+    const client = new CrmClient({ baseUrl: "https://crm.internal", fetch });
+    assert.deepEqual((await client.listPendingOpsTasks())[0].reviewGuide.allowedActions, []);
+  });
+
+  it("drops ops and order rows that omit required status fields", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [sampleOpsTask(), { id: "ghost" }],
+      }),
+      "GET /internal/regenic/pending-human-orders": jsonResponse(200, {
+        items: [sampleOrder(), { id: "pf-ghost" }],
+      }),
+    });
+    const client = new CrmClient({ baseUrl: "https://crm.internal", fetch });
+    assert.deepEqual(
+      (await client.listPendingOpsTasks()).map((item) => item.id),
+      ["task-1"],
+    );
+    assert.deepEqual(
+      (await client.listPendingHumanOrders()).map((item) => item.id),
+      ["pf-1"],
+    );
+  });
+
   it("prefixes write-back comments with the queue audit line", () => {
     assert.match(
       auditComment({ queue: "ops", hasToken: true, reportingOperationsUserId: "ops-9", promptText: "继续" }),

@@ -54,3 +54,5 @@ await host.plugin(crmOrderReviewPlugin, {
 ## 依赖
 
 对 `@regenic/domain`、`@regenic/plugin-host` 使用本地 `file:` 或内部 workspace，不要做成公开仓子包。
+
+`npm test` / `npm run build` 要求本机在同级目录有 `regenic` 仓库（`../../regenic/packages/domain` 与 `plugin-host`）。单独 clone `bioby-plugins` 跑不了测试。

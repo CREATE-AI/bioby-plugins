@@ -10,6 +10,7 @@ export const CRM_REVIEWER = "regenic";
 
 export const DEFAULT_MAX_OPEN_TASKS = 50;
 export const DEFAULT_MAX_OPEN_ORDER_REVIEWS = 50;
+export const CRM_REQUEST_TIMEOUT_MS = 15_000;
 
 export type CrmFetch = (
   url: string,
@@ -337,14 +338,16 @@ function parseOpsTask(value: unknown): CrmOpsTask | undefined {
     return undefined;
   }
   const id = stringValue(value.id ?? value.taskId);
-  if (!id) {
+  const status = stringValue(value.status);
+  const taskType = stringValue(value.taskType ?? value.kind);
+  if (!id || !status || !taskType) {
     return undefined;
   }
   const allowed = parseAllowedOpsActions(value);
   return {
     id,
-    status: stringValue(value.status) ?? "PENDING_REVIEW",
-    taskType: stringValue(value.taskType ?? value.kind) ?? "EMAIL_SUBMIT_AUTOMATION",
+    status,
+    taskType,
     nextAction: stringValue(value.nextAction),
     updatedAt:
       stringValue(value.updatedAt ?? value.updated_at ?? value.occurredAt) ??
@@ -366,18 +369,18 @@ function parseOrder(value: unknown): CrmOrder | undefined {
   const id = stringValue(
     value.id ?? value.projectFieldId ?? value.project_field_id,
   );
-  if (!id) {
+  const internalReviewStatus = stringValue(
+    value.internalReviewStatus ??
+      value.aiInternalReviewStatus ??
+      value.reviewStatus ??
+      value.status,
+  );
+  if (!id || !internalReviewStatus) {
     return undefined;
   }
   return {
     id,
-    internalReviewStatus:
-      stringValue(
-        value.internalReviewStatus ??
-          value.aiInternalReviewStatus ??
-          value.reviewStatus ??
-          value.status,
-      ) ?? "PENDING_HUMAN",
+    internalReviewStatus,
     updatedAt:
       stringValue(value.updatedAt ?? value.updated_at ?? value.occurredAt) ??
       new Date(0).toISOString(),
@@ -404,31 +407,57 @@ function parseReviewGuide(
   if (!isObject(value)) {
     return { allowedActions: fallback };
   }
-  const allowed = parseAllowedOpsActions(value);
+  const raw = readAllowedActionsField(value);
   return {
     headline: stringValue(value.headline),
     rationale: stringValue(value.rationale),
     suggestedNext: stringValue(value.suggestedNext ?? value.suggested_next),
-    allowedActions: allowed.length > 0 ? allowed : fallback,
+    allowedActions: raw === undefined ? fallback : parseAllowedList(raw),
   };
 }
 
 function parseAllowedOpsActions(value: unknown): OpsCompleteAction[] {
   if (!isObject(value)) {
-    return ["APPROVE_AND_CONTINUE", "CLOSE_TASK"];
+    return ["CLOSE_TASK"];
   }
-  const raw = value.allowedActions ?? value.allowed_actions ?? value.ctas;
+  const raw = readAllowedActionsField(value);
+  if (raw === undefined) {
+    return ["CLOSE_TASK"];
+  }
+  return parseAllowedList(raw);
+}
+
+function readAllowedActionsField(value: Record<string, unknown>): unknown {
+  if ("allowedActions" in value) {
+    return value.allowedActions;
+  }
+  if ("allowed_actions" in value) {
+    return value.allowed_actions;
+  }
+  if ("ctas" in value) {
+    return value.ctas;
+  }
+  return undefined;
+}
+
+function parseAllowedList(raw: unknown): OpsCompleteAction[] {
   if (!Array.isArray(raw)) {
-    return ["APPROVE_AND_CONTINUE", "CLOSE_TASK"];
-  }
-  const allowed: OpsCompleteAction[] = raw.flatMap((item) => {
-    const label = typeof item === "string" ? item : isObject(item) ? stringValue(item.action ?? item.label) : undefined;
-    if (label === "APPROVE_AND_CONTINUE" || label === "CLOSE_TASK") {
-      return [label];
-    }
     return [];
-  });
-  return allowed.length > 0 ? unique(allowed) : ["APPROVE_AND_CONTINUE", "CLOSE_TASK"];
+  }
+  return unique(
+    raw.flatMap((item) => {
+      const label =
+        typeof item === "string"
+          ? item
+          : isObject(item)
+            ? stringValue(item.action ?? item.label)
+            : undefined;
+      if (label === "APPROVE_AND_CONTINUE" || label === "CLOSE_TASK") {
+        return [label];
+      }
+      return [];
+    }),
+  );
 }
 
 function parseProject(value: unknown): CrmOpsTask["project"] {
@@ -470,7 +499,10 @@ async function defaultFetch(
   url: string,
   init: { method?: string; headers: Record<string, string>; body?: string },
 ): Promise<CrmFetchResponse> {
-  const response = await fetch(url, init);
+  const response = await fetch(url, {
+    ...init,
+    signal: AbortSignal.timeout(CRM_REQUEST_TIMEOUT_MS),
+  });
   return {
     ok: response.ok,
     status: response.status,
