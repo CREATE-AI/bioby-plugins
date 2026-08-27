@@ -109,6 +109,23 @@ export function parseOrderReviewResult(value: string): OrderReviewResult | undef
   return undefined;
 }
 
+export function writeBackLabels(label: string): string[] {
+  const trimmed = label.trim();
+  if (trimmed === "REJECTED") {
+    return ["REJECTED", "不通过"];
+  }
+  if (trimmed === "APPROVED") {
+    return ["APPROVED", "通过"];
+  }
+  if (trimmed === "CLOSE_TASK") {
+    return ["CLOSE_TASK", "关闭任务"];
+  }
+  if (trimmed === "APPROVE_AND_CONTINUE") {
+    return ["APPROVE_AND_CONTINUE", "继续自动化"];
+  }
+  return trimmed ? [trimmed] : [];
+}
+
 function parsePrefixedId(value: string, prefixes: string[]): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) {

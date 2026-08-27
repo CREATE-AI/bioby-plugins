@@ -10,6 +10,7 @@ import {
 import type { Host } from "@regenic/plugin-host";
 import {
   CRM_BASE_URL_ENV,
+  crmCatalogPrerequisites,
   crmClientFromEnv,
   crmHasToken,
   DEFAULT_MAX_OPEN_ORDER_REVIEWS,
@@ -22,6 +23,7 @@ import {
   isOrderTarget,
   ORDER_CONNECTOR_TYPE,
   orderStreamKey,
+  writeBackLabels,
 } from "./locators";
 import { crmOrderReviewPlugin } from "./plugin";
 import { answerOrderPrompt, listOrderPrompts } from "./prompts";
@@ -95,6 +97,35 @@ export const crmOrderReviewDriver: ChannelDriver = {
 
   outboundId(thread: ConversationThread) {
     return `${thread.target}:out:local`;
+  },
+
+  installCatalog() {
+    return {
+      title: "CRM order review",
+      description:
+        "Private plugin. Pulls orders whose AI internal review is waiting for a human.",
+      credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
+      singleton: true,
+      fields: [
+        {
+          key: "max_open_order_reviews",
+          label: "Max open order reviews",
+          required: false,
+          default: "50",
+          placeholder: "50",
+        },
+      ],
+      prerequisites: crmCatalogPrerequisites(),
+    };
+  },
+
+  writeBackLabels,
+
+  presentInstall(installation) {
+    return {
+      label: "Order internal review",
+      detail: configString(installation.config, "max_open_order_reviews") ?? "50",
+    };
   },
 
   async probeCatalog({ env }) {
@@ -203,6 +234,14 @@ export async function mountOrderStream(
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);
+}
+
+function configString(
+  config: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  const value = config[name];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function configNumber(

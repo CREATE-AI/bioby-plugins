@@ -8,6 +8,25 @@ export const CRM_BASE_URL_ENV = "REGENIC_CRM_BASE_URL";
 export const CRM_TOKEN_ENV = "REGENIC_CRM_TOKEN";
 export const CRM_REVIEWER = "regenic";
 
+export function crmCatalogPrerequisites() {
+  return [
+    {
+      kind: "env" as const,
+      key: CRM_BASE_URL_ENV,
+      label: "CRM base URL",
+      required: true,
+      hint: `Set ${CRM_BASE_URL_ENV} before starting the desktop, including /api, e.g. https://crm-host/api. The form does not take it.`,
+    },
+    {
+      kind: "env" as const,
+      key: CRM_TOKEN_ENV,
+      label: "CRM reporting-ops token",
+      required: false,
+      hint: "Optional. When set, CRM must scope to that reporting-ops user. A bad token must 401.",
+    },
+  ];
+}
+
 export const DEFAULT_MAX_OPEN_TASKS = 50;
 export const DEFAULT_MAX_OPEN_ORDER_REVIEWS = 50;
 export const CRM_REQUEST_TIMEOUT_MS = 15_000;

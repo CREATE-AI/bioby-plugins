@@ -113,4 +113,38 @@ describe("CRM drivers and plugins", () => {
     );
     assert.equal(found?.driver.connector_type, "crm-order-review");
   });
+
+  it("declares install catalog cards and write-back labels on the drivers", () => {
+    const ops = crmOpsReviewDriver.installCatalog();
+    const order = crmOrderReviewDriver.installCatalog();
+    assert.equal(ops.title, "CRM ops review");
+    assert.equal(ops.singleton, true);
+    assert.equal(ops.fields[0].key, "max_open_tasks");
+    assert.equal(
+      ops.prerequisites.some((item) => item.key === "REGENIC_CRM_BASE_URL" && item.required),
+      true,
+    );
+    assert.equal(order.title, "CRM order review");
+    assert.equal(order.singleton, true);
+    assert.equal(order.fields[0].key, "max_open_order_reviews");
+    assert.deepEqual(crmOrderReviewDriver.writeBackLabels("REJECTED"), [
+      "REJECTED",
+      "不通过",
+    ]);
+    assert.deepEqual(crmOrderReviewDriver.writeBackLabels("APPROVED"), [
+      "APPROVED",
+      "通过",
+    ]);
+    assert.deepEqual(crmOpsReviewDriver.presentInstall({
+      id: "crm-1",
+      org_id: "local-owner",
+      connector_type: "crm-ops-review",
+      status: "enabled",
+      config: { max_open_tasks: "50" },
+      created_at: "2026-08-26T00:00:00.000Z",
+    }), {
+      label: "Email submit review",
+      detail: "50",
+    });
+  });
 });

@@ -11,6 +11,7 @@ const {
   parseOrderId,
   parseOpsCompleteAction,
   parseOrderReviewResult,
+  writeBackLabels,
   opsStreamKey,
   orderStreamKey,
   isOpsTaskTarget,
@@ -55,5 +56,12 @@ describe("CRM locators", () => {
     assert.equal(parseOrderReviewResult("不建议通过"), undefined);
     assert.equal(parseOrderReviewResult("审核结果：**不通过**\n地区不符"), undefined);
     assert.equal(parseOrderReviewResult("CLOSE_TASK"), undefined);
+    assert.deepEqual(writeBackLabels("REJECTED"), ["REJECTED", "不通过"]);
+    assert.deepEqual(writeBackLabels("APPROVED"), ["APPROVED", "通过"]);
+    assert.deepEqual(writeBackLabels("CLOSE_TASK"), ["CLOSE_TASK", "关闭任务"]);
+    assert.deepEqual(writeBackLabels("APPROVE_AND_CONTINUE"), [
+      "APPROVE_AND_CONTINUE",
+      "继续自动化",
+    ]);
   });
 });

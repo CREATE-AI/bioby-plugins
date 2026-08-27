@@ -10,6 +10,7 @@ import {
 import type { Host } from "@regenic/plugin-host";
 import {
   CRM_BASE_URL_ENV,
+  crmCatalogPrerequisites,
   crmClientFromEnv,
   crmHasToken,
   DEFAULT_MAX_OPEN_TASKS,
@@ -22,6 +23,7 @@ import {
   isOpsTaskTarget,
   OPS_CONNECTOR_TYPE,
   opsStreamKey,
+  writeBackLabels,
 } from "./locators";
 import { answerOpsPrompt, listOpsPrompts } from "./prompts";
 import { crmOpsReviewPlugin } from "./plugin";
@@ -95,6 +97,35 @@ export const crmOpsReviewDriver: ChannelDriver = {
 
   outboundId(thread: ConversationThread) {
     return `${thread.target}:out:local`;
+  },
+
+  installCatalog() {
+    return {
+      title: "CRM ops review",
+      description:
+        "Private plugin. Pulls email-submit PENDING_REVIEW tasks; DSH decides, the connector completes.",
+      credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
+      singleton: true,
+      fields: [
+        {
+          key: "max_open_tasks",
+          label: "Max open tasks",
+          required: false,
+          default: "50",
+          placeholder: "50",
+        },
+      ],
+      prerequisites: crmCatalogPrerequisites(),
+    };
+  },
+
+  writeBackLabels,
+
+  presentInstall(installation) {
+    return {
+      label: "Email submit review",
+      detail: configString(installation.config, "max_open_tasks") ?? "50",
+    };
   },
 
   async probeCatalog({ env }) {
@@ -199,6 +230,14 @@ export async function mountOpsStream(
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);
+}
+
+function configString(
+  config: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  const value = config[name];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function configNumber(
