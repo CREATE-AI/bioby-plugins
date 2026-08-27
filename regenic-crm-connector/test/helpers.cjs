@@ -76,6 +76,32 @@ function sampleOrder(overrides = {}) {
     clientRequirement: "要竖屏带货",
     quote: "8000",
     relatedOpsTaskId: "task-1",
+    aiReview: {
+      decision: "PENDING",
+      confidence: "0.71",
+      summary: "报价和内容都需要人工看一下",
+      invocationId: "inv-1",
+      dimensionAnalyses: ["粉丝量够", "内容风格偏弱"],
+    },
+    talent: {
+      nickname: "小红",
+      platform: "tiktok",
+      profileUrl: "https://www.tiktok.com/@xiaohong",
+      email: "red@example.com",
+      follower: "12000",
+      region: "US",
+      avgView: "800",
+      engagementRate: "0.042",
+      cpm: "18",
+      quote: "8000",
+      cooperationMethod: "带货",
+    },
+    autoReviewLog: {
+      operation: "INFLUENCER_FIT_AUTO_INTERNAL_REVIEW",
+      decision: "PENDING",
+      userMessage: '{"clientRequirement":"要竖屏带货","influencerInfo":{"nickname":"小红"}}',
+      agentResponse: '{"decision":"PENDING","summary":"需要人工确认"}',
+    },
     ...overrides,
   };
 }

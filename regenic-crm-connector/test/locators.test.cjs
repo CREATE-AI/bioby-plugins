@@ -50,6 +50,7 @@ describe("CRM locators", () => {
     assert.equal(parseOpsCompleteAction("CLOSE_TASK"), "CLOSE_TASK");
     assert.equal(parseOpsCompleteAction("APPROVED"), undefined);
     assert.equal(parseOrderReviewResult("通过"), "APPROVED");
+    assert.equal(parseOrderReviewResult("审核结果：**不通过**\n地区不符"), "REJECTED");
     assert.equal(parseOrderReviewResult("CLOSE_TASK"), undefined);
   });
 });

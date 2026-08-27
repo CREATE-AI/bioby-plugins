@@ -141,22 +141,69 @@ export function formatOpsBody(task: CrmOpsTask): string {
   return lines.join("\n");
 }
 
+const MAX_LOG_CHARS = 12_000;
+
 export function formatOrderBody(order: CrmOrder): string {
-  const lines = [
-    "# 订单 AI 内审待人工",
-    "",
-    `- locator: ${orderThreadId(order.id)}`,
-    `- projectFieldId: ${order.id}`,
-    `- internalReviewStatus: ${order.internalReviewStatus}`,
-  ];
-  if (order.relatedOpsTaskId) {
-    lines.push(`- relatedOpsTask: ${opsTaskThreadId(order.relatedOpsTaskId)}`);
-  }
+  const talent = order.talent;
+  const review = order.aiReview;
+  const log = order.autoReviewLog;
+  const lines = ["# 订单 AI 内审待人工", ""];
   pushField(lines, "项目", order.projectName);
-  pushField(lines, "达人", order.talentName);
-  pushField(lines, "报价", order.quote);
+  pushField(lines, "达人", talent?.nickname ?? order.talentName);
+  pushField(lines, "报价", talent?.quote ?? order.quote);
+  if (review && hasReviewContent(review)) {
+    lines.push("", "## AI 内审结论");
+    pushField(lines, "decision", review.decision);
+    pushField(lines, "confidence", review.confidence);
+    pushField(lines, "invocationId", review.invocationId);
+    pushField(lines, "evaluatedAt", review.evaluatedAt);
+    if (review.summary) {
+      lines.push("", review.summary);
+    }
+    if (review.dimensionAnalyses?.length) {
+      lines.push("", "### 维度分析");
+      for (const item of review.dimensionAnalyses) {
+        lines.push(`- ${item}`);
+      }
+    }
+  }
   if (order.clientRequirement) {
-    lines.push("", "## 客户需求", "", order.clientRequirement);
+    lines.push("", "## 项目需求", "", order.clientRequirement);
+  }
+  if (talent && hasTalentContent(talent)) {
+    lines.push("", "## 达人");
+    pushField(lines, "昵称", talent.nickname ?? order.talentName);
+    pushField(lines, "平台", talent.platform);
+    pushField(lines, "主页", talent.profileUrl);
+    pushField(lines, "邮箱", talent.email);
+    pushField(lines, "粉丝", talent.follower);
+    pushField(lines, "地区", talent.region);
+    pushField(lines, "均播", talent.avgView);
+    pushField(lines, "互动率", talent.engagementRate);
+    pushField(lines, "CPM", talent.cpm);
+    pushField(lines, "报价", talent.quote ?? order.quote);
+    pushField(lines, "对外报价", talent.externalQuote);
+    pushField(lines, "合作形式", talent.cooperationMethod);
+    pushField(lines, "分类", talent.category);
+    pushField(lines, "达人类型", talent.influencerType);
+    if (talent.supplementaryNotesContent) {
+      lines.push("", "### 补充说明", "", talent.supplementaryNotesContent);
+    }
+  }
+  if (log && hasLogContent(log)) {
+    lines.push("", "## 自动内审日志");
+    pushField(lines, "operation", log.operation);
+    pushField(lines, "decision", log.decision);
+    pushField(lines, "invocationId", log.invocationId);
+    pushField(lines, "logTime", log.logTime);
+    if (log.reviewComment) {
+      lines.push("", log.reviewComment);
+    }
+    pushCode(lines, "userMessage", log.userMessage);
+    pushCode(lines, "agentResponse", log.agentResponse);
+    if (log.error) {
+      pushCode(lines, "error", log.error);
+    }
   }
   lines.push(
     "",
@@ -164,6 +211,60 @@ export function formatOrderBody(order: CrmOrder): string {
     "只改本订单内审（APPROVED / REJECTED）。不得 complete 关联运营任务。",
   );
   return lines.join("\n");
+}
+
+function hasReviewContent(review: NonNullable<CrmOrder["aiReview"]>): boolean {
+  return Boolean(
+    review.decision ||
+      review.confidence ||
+      review.summary ||
+      review.invocationId ||
+      review.dimensionAnalyses?.length,
+  );
+}
+
+function hasTalentContent(talent: NonNullable<CrmOrder["talent"]>): boolean {
+  return Boolean(
+    talent.nickname ||
+      talent.platform ||
+      talent.profileUrl ||
+      talent.email ||
+      talent.follower ||
+      talent.region ||
+      talent.avgView ||
+      talent.engagementRate ||
+      talent.cpm ||
+      talent.quote ||
+      talent.externalQuote ||
+      talent.cooperationMethod ||
+      talent.category ||
+      talent.influencerType ||
+      talent.supplementaryNotesContent,
+  );
+}
+
+function hasLogContent(log: NonNullable<CrmOrder["autoReviewLog"]>): boolean {
+  return Boolean(
+    log.operation ||
+      log.userMessage ||
+      log.agentResponse ||
+      log.decision ||
+      log.error,
+  );
+}
+
+function pushCode(lines: string[], title: string, value: string | undefined): void {
+  if (!value) {
+    return;
+  }
+  lines.push("", `### ${title}`, "", "```", clipLog(value), "```");
+}
+
+function clipLog(value: string): string {
+  if (value.length <= MAX_LOG_CHARS) {
+    return value;
+  }
+  return `${value.slice(0, MAX_LOG_CHARS)}\n…（已截断）`;
 }
 
 function opsMetadata(task: CrmOpsTask): Record<string, unknown> {

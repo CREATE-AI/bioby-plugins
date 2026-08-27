@@ -24,10 +24,9 @@ describe("CrmOrderPollConnector", () => {
     const result = await connector.poll(null);
     assert.equal(result.batch.records[0].type, "task");
     assert.equal(result.batch.records[0].thread.id, "crm:order:pf-1");
-    assert.match(
-      result.batch.records[0].content.find((part) => part.role === "body").text,
-      /crm:ops_task:task-1/,
-    );
+    const body = result.batch.records[0].content.find((part) => part.role === "body").text;
+    assert.match(body, /订单 AI 内审待人工/);
+    assert.doesNotMatch(body, /locator:|projectFieldId:|internalReviewStatus:/);
     assert.equal(
       fetch.calls.some((call) => call.pathname.includes("/complete")),
       false,

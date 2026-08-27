@@ -69,6 +69,44 @@ export interface CrmOpsTask {
   conversationLabel?: string;
 }
 
+export interface CrmOrderAiReview {
+  decision?: string;
+  confidence?: string;
+  summary?: string;
+  invocationId?: string;
+  evaluatedAt?: string;
+  dimensionAnalyses?: string[];
+}
+
+export interface CrmOrderTalent {
+  nickname?: string;
+  platform?: string;
+  profileUrl?: string;
+  email?: string;
+  follower?: string;
+  region?: string;
+  avgView?: string;
+  engagementRate?: string;
+  cpm?: string;
+  quote?: string;
+  externalQuote?: string;
+  cooperationMethod?: string;
+  category?: string;
+  influencerType?: string;
+  supplementaryNotesContent?: string;
+}
+
+export interface CrmOrderAutoReviewLog {
+  operation?: string;
+  decision?: string;
+  invocationId?: string;
+  reviewComment?: string;
+  userMessage?: string;
+  agentResponse?: string;
+  error?: string;
+  logTime?: string;
+}
+
 export interface CrmOrder {
   id: string;
   internalReviewStatus: string;
@@ -80,6 +118,9 @@ export interface CrmOrder {
   quote?: string;
   relatedOpsTaskId?: string;
   conversationLabel?: string;
+  aiReview?: CrmOrderAiReview;
+  talent?: CrmOrderTalent;
+  autoReviewLog?: CrmOrderAutoReviewLog;
 }
 
 export interface CrmClientOptions {
@@ -397,7 +438,74 @@ function parseOrder(value: unknown): CrmOrder | undefined {
       value.relatedOpsTaskId ?? value.related_ops_task_id,
     ),
     conversationLabel: stringValue(value.conversationLabel ?? value.conversation_label),
+    aiReview: parseAiReview(value.aiReview ?? value.ai_review),
+    talent: parseTalent(value.talent ?? value.influencer),
+    autoReviewLog: parseAutoReviewLog(
+      value.autoReviewLog ?? value.auto_review_log,
+    ),
   };
+}
+
+function parseAiReview(value: unknown): CrmOrderAiReview | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const review: CrmOrderAiReview = {
+    decision: scalarValue(value.decision),
+    confidence: scalarValue(value.confidence),
+    summary: scalarValue(value.summary),
+    invocationId: scalarValue(value.invocationId ?? value.invocation_id),
+    evaluatedAt: scalarValue(value.evaluatedAt ?? value.evaluated_at),
+    dimensionAnalyses: stringList(
+      value.dimensionAnalyses ?? value.dimension_analyses,
+    ),
+  };
+  return hasDefined(review) ? review : undefined;
+}
+
+function parseTalent(value: unknown): CrmOrderTalent | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const talent: CrmOrderTalent = {
+    nickname: scalarValue(value.nickname),
+    platform: scalarValue(value.platform),
+    profileUrl: scalarValue(value.profileUrl ?? value.profile_url ?? value.bloggerLink),
+    email: scalarValue(value.email),
+    follower: scalarValue(value.follower),
+    region: scalarValue(value.region),
+    avgView: scalarValue(value.avgView ?? value.aveView ?? value.avg_view),
+    engagementRate: scalarValue(value.engagementRate ?? value.engagement_rate),
+    cpm: scalarValue(value.cpm),
+    quote: scalarValue(value.quote),
+    externalQuote: scalarValue(value.externalQuote ?? value.external_quote),
+    cooperationMethod: scalarValue(
+      value.cooperationMethod ?? value.cooperation_method,
+    ),
+    category: scalarValue(value.category),
+    influencerType: scalarValue(value.influencerType ?? value.influencer_type),
+    supplementaryNotesContent: scalarValue(
+      value.supplementaryNotesContent ?? value.supplementary_notes_content,
+    ),
+  };
+  return hasDefined(talent) ? talent : undefined;
+}
+
+function parseAutoReviewLog(value: unknown): CrmOrderAutoReviewLog | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const log: CrmOrderAutoReviewLog = {
+    operation: scalarValue(value.operation),
+    decision: scalarValue(value.decision),
+    invocationId: scalarValue(value.invocationId ?? value.invocation_id),
+    reviewComment: scalarValue(value.reviewComment ?? value.review_comment),
+    userMessage: scalarValue(value.userMessage ?? value.user_message),
+    agentResponse: scalarValue(value.agentResponse ?? value.agent_response),
+    error: scalarValue(value.error),
+    logTime: scalarValue(value.logTime ?? value.log_time),
+  };
+  return hasDefined(log) ? log : undefined;
 }
 
 function parseReviewGuide(
@@ -517,6 +625,34 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function scalarValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.trim() ? value.trim() : undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return String(value);
+  }
+  return undefined;
+}
+
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const items = value.flatMap((item) => {
+    const text = scalarValue(item);
+    return text ? [text] : [];
+  });
+  return items.length > 0 ? items : undefined;
+}
+
+function hasDefined(value: object): boolean {
+  return Object.values(value).some((item) => item !== undefined);
 }
 
 function unique<T>(values: T[]): T[] {

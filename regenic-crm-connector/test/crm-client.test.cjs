@@ -82,6 +82,28 @@ describe("CrmClient", () => {
     assert.equal(JSON.parse(fetch.calls[1].body).result, "APPROVED");
   });
 
+  it("parses AI review context on pending human orders", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/pending-human-orders": jsonResponse(200, {
+        items: [
+          sampleOrder({
+            talent: {
+              nickname: "小红",
+              follower: 12000,
+              engagementRate: 0.042,
+            },
+          }),
+        ],
+      }),
+    });
+    const client = new CrmClient({ baseUrl: "https://crm.internal", fetch });
+    const [order] = await client.listPendingHumanOrders();
+    assert.equal(order.talent.nickname, "小红");
+    assert.equal(order.talent.follower, "12000");
+    assert.equal(order.aiReview.summary, "报价和内容都需要人工看一下");
+    assert.match(order.autoReviewLog.userMessage, /要竖屏带货/);
+  });
+
   it("unwraps CRM ApiResponse.data wrappers", async () => {
     const fetch = createFetch({
       "GET /api/internal/regenic/pending-ops-tasks": jsonResponse(200, {
