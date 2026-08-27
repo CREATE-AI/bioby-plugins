@@ -132,6 +132,36 @@ describe("CRM prompts", () => {
     );
   });
 
+  it("does not infer an order review result from narrative custom text", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/orders/pf-1": jsonResponse(200, sampleOrder()),
+    });
+    await assert.rejects(
+      () =>
+        answerOrderPrompt(
+          new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+          "order:pf-1",
+          {
+            prompt_id: "crm:audit:pf-1",
+            answers: [
+              {
+                id: "decision",
+                selected: [],
+                custom: "未通过，地区不符，不建议通过",
+              },
+            ],
+          },
+        ),
+      (error) =>
+        error instanceof ChannelDriverError &&
+        error.message.includes("APPROVED or REJECTED"),
+    );
+    assert.equal(
+      fetch.calls.some((call) => call.method === "POST"),
+      false,
+    );
+  });
+
   it("writes order internal-review without completing an ops task", async () => {
     const fetch = createFetch({
       "GET /internal/regenic/orders/pf-1": jsonResponse(200, sampleOrder()),

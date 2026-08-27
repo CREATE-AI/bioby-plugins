@@ -100,20 +100,11 @@ export function parseOpsCompleteAction(value: string): OpsCompleteAction | undef
 
 export function parseOrderReviewResult(value: string): OrderReviewResult | undefined {
   const normalized = value.trim();
-  if (!normalized) {
-    return undefined;
-  }
   if (normalized === "APPROVED" || normalized === "通过") {
     return "APPROVED";
   }
   if (normalized === "REJECTED" || normalized === "不通过") {
     return "REJECTED";
-  }
-  if (/REJECTED|不通过/i.test(normalized)) {
-    return "REJECTED";
-  }
-  if (/APPROVED|审核通过/.test(normalized) || (/通过/.test(normalized) && !/不通过/.test(normalized))) {
-    return "APPROVED";
   }
   return undefined;
 }
