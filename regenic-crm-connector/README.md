@@ -11,9 +11,13 @@
 
 写回审核人 / 操作者一律由 CRM 记为 `regenic`，与是否带 token 无关。
 
-公开引擎页已有 CRM 安装卡片。没有本包时卡片会显示，但前置条件不满足，装不上。
+公开引擎页有安装卡片，但开源仓不会自动发现本包。本机先指到这个目录再设 CRM 地址：
 
-本机把包放到与 `regenic` 同级的 `bioby-plugins/regenic-crm-connector`，或设置 `REGENIC_CRM_CONNECTOR` / 装好 `@bioby/regenic-crm-connector`，再设 `REGENIC_CRM_BASE_URL` 后即可在引擎页安装。
+```bash
+export REGENIC_CRM_CONNECTOR="$HOME/Documents/git/bioby-plugins/regenic-crm-connector"
+# 或：export REGENIC_PLUGIN_DIR="$HOME/Documents/git/bioby-plugins"
+export REGENIC_CRM_BASE_URL="https://crm-host/api"
+```
 
 ## 内部挂载
 
