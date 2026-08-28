@@ -1,4 +1,5 @@
 export const CRM_SOURCE = "crm";
+export const CRM_CHANNEL_LABEL = "CRM";
 
 export const OPS_TARGET_PREFIX = "ops_task:";
 export const ORDER_TARGET_PREFIX = "order:";

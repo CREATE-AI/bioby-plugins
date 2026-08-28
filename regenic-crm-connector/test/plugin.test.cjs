@@ -1,6 +1,10 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { ChannelDriverError, ChannelDriverRegistry, MemoryConnectorRegistry } = require("@regenic/domain");
+const {
+  ChannelDriverRegistry,
+  MemoryConnectorRegistry,
+  verifyChannelDriverConformance,
+} = require("@regenic/domain");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
 const {
   crmOpsReviewDriver,
@@ -15,7 +19,7 @@ const env = {
 };
 
 describe("CRM drivers and plugins", () => {
-  it("splits ownsThread by locator prefix and refuses egress", async () => {
+  it("splits ownsThread by locator prefix and stays sync-only", () => {
     const ops = {
       id: "ops-1",
       org_id: "local-owner",
@@ -30,6 +34,7 @@ describe("CRM drivers and plugins", () => {
       connector_type: "crm-order-review",
       config: { max_open_order_reviews: 50 },
     };
+    const disabled = { ...ops, status: "disabled" };
     assert.equal(
       crmOpsReviewDriver.ownsThread(ops, { source: "crm", target: "ops_task:1" }),
       true,
@@ -49,14 +54,42 @@ describe("CRM drivers and plugins", () => {
       list_title: "conversation",
       prompts: true,
     });
-    await assert.rejects(
-      () => crmOpsReviewDriver.bindEgress(),
-      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    assert.equal(crmOpsReviewDriver.connector_protocol, "1.0");
+    assert.equal(crmOrderReviewDriver.connector_protocol, "1.0");
+    assert.equal(crmOpsReviewDriver.createThread, undefined);
+    assert.equal(crmOpsReviewDriver.bindEgress, undefined);
+    assert.equal(crmOpsReviewDriver.outboundId, undefined);
+    assert.equal(crmOpsReviewDriver.canReply, undefined);
+    assert.equal(crmOrderReviewDriver.createThread, undefined);
+    assert.equal(crmOrderReviewDriver.bindEgress, undefined);
+    assert.equal(
+      crmOpsReviewDriver.install({
+        id: "ops-1",
+        org_id: "local-owner",
+        config: { max_open_tasks: "50" },
+        now: "2026-08-26T00:00:00.000Z",
+      }).credentials_ref,
+      "env:REGENIC_CRM_TOKEN",
     );
-    await assert.rejects(
-      () => crmOrderReviewDriver.createThread(),
-      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    assert.equal(
+      crmOrderReviewDriver.install({
+        id: "order-1",
+        org_id: "local-owner",
+        config: { max_open_order_reviews: "50" },
+        now: "2026-08-26T00:00:00.000Z",
+      }).credentials_ref,
+      "env:REGENIC_CRM_TOKEN",
     );
+    verifyChannelDriverConformance({
+      driver: crmOpsReviewDriver,
+      enabled: ops,
+      disabled,
+    });
+    verifyChannelDriverConformance({
+      driver: crmOrderReviewDriver,
+      enabled: order,
+      disabled: { ...order, status: "disabled" },
+    });
   });
 
   it("registers the ops stream on the host and unregisters on dispose", async () => {
@@ -118,6 +151,7 @@ describe("CRM drivers and plugins", () => {
     const ops = crmOpsReviewDriver.installCatalog();
     const order = crmOrderReviewDriver.installCatalog();
     assert.equal(ops.title, "CRM ops review");
+    assert.equal(ops.channel_label, "CRM");
     assert.equal(ops.singleton, true);
     assert.equal(ops.fields[0].key, "max_open_tasks");
     assert.equal(
@@ -125,6 +159,7 @@ describe("CRM drivers and plugins", () => {
       true,
     );
     assert.equal(order.title, "CRM order review");
+    assert.equal(order.channel_label, "CRM");
     assert.equal(order.singleton, true);
     assert.equal(order.fields[0].key, "max_open_order_reviews");
     assert.deepEqual(crmOrderReviewDriver.writeBackLabels("REJECTED"), [

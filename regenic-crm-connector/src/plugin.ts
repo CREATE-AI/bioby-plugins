@@ -13,6 +13,7 @@ export interface CrmOpsReviewPluginConfig {
   installation_id: string;
   org_id: string;
   max_open_tasks?: number;
+  credentials_ref?: string;
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
   now?: () => string;
@@ -22,6 +23,7 @@ export interface CrmOrderReviewPluginConfig {
   installation_id: string;
   org_id: string;
   max_open_order_reviews?: number;
+  credentials_ref?: string;
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
   now?: () => string;
@@ -32,13 +34,20 @@ export const crmOpsReviewPlugin = definePlugin<CrmOpsReviewPluginConfig>({
   inject: ["connectors"],
   apply(ctx, config) {
     const env = config.env ?? process.env;
-    const connector = new CrmOpsPollConnector(crmClientFromEnv({ env, fetch: config.fetch }), {
-      connector_id: config.installation_id,
-      org_id: config.org_id,
-      max_open_tasks: config.max_open_tasks,
-      now: config.now,
-    });
-    const scope = crmScopeOf(crmHasToken(env));
+    const connector = new CrmOpsPollConnector(
+      crmClientFromEnv({
+        env,
+        fetch: config.fetch,
+        credentials_ref: config.credentials_ref,
+      }),
+      {
+        connector_id: config.installation_id,
+        org_id: config.org_id,
+        max_open_tasks: config.max_open_tasks,
+        now: config.now,
+      },
+    );
+    const scope = crmScopeOf(crmHasToken(env, config.credentials_ref));
     ctx.effect(() =>
       ctx.get("connectors").register(config.installation_id, connector, {
         stream_key: opsStreamKey(scope),
@@ -56,7 +65,11 @@ export const crmOrderReviewPlugin = definePlugin<CrmOrderReviewPluginConfig>({
   apply(ctx, config) {
     const env = config.env ?? process.env;
     const connector = new CrmOrderPollConnector(
-      crmClientFromEnv({ env, fetch: config.fetch }),
+      crmClientFromEnv({
+        env,
+        fetch: config.fetch,
+        credentials_ref: config.credentials_ref,
+      }),
       {
         connector_id: config.installation_id,
         org_id: config.org_id,
@@ -64,7 +77,7 @@ export const crmOrderReviewPlugin = definePlugin<CrmOrderReviewPluginConfig>({
         now: config.now,
       },
     );
-    const scope = crmScopeOf(crmHasToken(env));
+    const scope = crmScopeOf(crmHasToken(env, config.credentials_ref));
     ctx.effect(() =>
       ctx.get("connectors").register(config.installation_id, connector, {
         stream_key: orderStreamKey(scope),

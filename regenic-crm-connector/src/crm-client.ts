@@ -1,4 +1,4 @@
-import { ChannelDriverError } from "@regenic/domain";
+import { ChannelDriverError, readEnvCredential } from "@regenic/domain";
 import type {
   OpsCompleteAction,
   OrderReviewResult,
@@ -151,6 +151,7 @@ export interface CrmClientOptions {
 export interface CrmEnvOptions {
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
+  credentials_ref?: string;
 }
 
 export class CrmClient {
@@ -290,6 +291,13 @@ export class CrmClient {
   }
 }
 
+export function crmTokenFrom(
+  env: NodeJS.ProcessEnv = process.env,
+  credentialsRef?: string,
+): string | undefined {
+  return readEnvCredential(credentialsRef, env, CRM_TOKEN_ENV);
+}
+
 export function crmClientFromEnv(input: CrmEnvOptions = {}): CrmClient {
   const env = input.env ?? process.env;
   const baseUrl = env[CRM_BASE_URL_ENV]?.trim();
@@ -301,13 +309,16 @@ export function crmClientFromEnv(input: CrmEnvOptions = {}): CrmClient {
   }
   return new CrmClient({
     baseUrl,
-    token: env[CRM_TOKEN_ENV],
+    token: crmTokenFrom(env, input.credentials_ref),
     fetch: input.fetch,
   });
 }
 
-export function crmHasToken(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env[CRM_TOKEN_ENV]?.trim());
+export function crmHasToken(
+  env: NodeJS.ProcessEnv = process.env,
+  credentialsRef?: string,
+): boolean {
+  return Boolean(crmTokenFrom(env, credentialsRef));
 }
 
 export function isEmailSubmitPending(task: CrmOpsTask): boolean {
