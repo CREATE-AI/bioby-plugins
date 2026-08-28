@@ -1,15 +1,17 @@
 import {
+  CONNECTOR_PROTOCOL,
   ChannelDriverError,
+  envCredentialsRef,
   requireConnectorStream,
   type ChannelDriver,
   type ConnectorInstallation,
-  type ConversationThread,
   type JsonValue,
   type NewConnectorInstallation,
 } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import {
   CRM_BASE_URL_ENV,
+  CRM_TOKEN_ENV,
   crmCatalogPrerequisites,
   crmClientFromEnv,
   crmHasToken,
@@ -18,6 +20,7 @@ import {
   type CrmFetch,
 } from "./crm-client";
 import {
+  CRM_CHANNEL_LABEL,
   CRM_SOURCE,
   crmScopeOf,
   isOpsTaskTarget,
@@ -32,6 +35,7 @@ import { opsConversationLabel } from "./records";
 export const crmOpsReviewDriver: ChannelDriver = {
   connector_type: OPS_CONNECTOR_TYPE,
   source: CRM_SOURCE,
+  connector_protocol: CONNECTOR_PROTOCOL,
 
   install(input): NewConnectorInstallation {
     return {
@@ -40,6 +44,7 @@ export const crmOpsReviewDriver: ChannelDriver = {
       connector_type: OPS_CONNECTOR_TYPE,
       status: "enabled",
       config: opsInstallConfig(input.config),
+      credentials_ref: envCredentialsRef(CRM_TOKEN_ENV),
       created_at: input.now,
     };
   },
@@ -69,17 +74,6 @@ export const crmOpsReviewDriver: ChannelDriver = {
     };
   },
 
-  canReply() {
-    return false;
-  },
-
-  async createThread() {
-    throw new ChannelDriverError(
-      "unsupported_channel",
-      "Creating a CRM ops task is not available",
-    );
-  },
-
   async resolveStreams(installation, host, env) {
     return [await mountOpsStream(host, installation, env)];
   },
@@ -88,20 +82,10 @@ export const crmOpsReviewDriver: ChannelDriver = {
     return mountOpsStream(host, installation, env);
   },
 
-  async bindEgress() {
-    throw new ChannelDriverError(
-      "unsupported_channel",
-      "CRM ops complete must go through answerPrompt, not egress",
-    );
-  },
-
-  outboundId(thread: ConversationThread) {
-    return `${thread.target}:out:local`;
-  },
-
   installCatalog() {
     return {
       title: "CRM ops review",
+      channel_label: CRM_CHANNEL_LABEL,
       description:
         "Private plugin. Pulls email-submit PENDING_REVIEW tasks; DSH decides, the connector completes.",
       credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
@@ -153,7 +137,10 @@ export const crmOpsReviewDriver: ChannelDriver = {
       return labels;
     }
     try {
-      const client = crmClientFromEnv({ env });
+      const client = crmClientFromEnv({
+        env,
+        credentials_ref: installation.credentials_ref,
+      });
       await Promise.all(
         wanted.map(async (thread) => {
           const taskId = thread.target.slice("ops_task:".length);
@@ -176,7 +163,10 @@ export const crmOpsReviewDriver: ChannelDriver = {
       return [];
     }
     try {
-      return await listOpsPrompts(crmClientFromEnv({ env }), thread.target);
+      return await listOpsPrompts(
+        crmClientFromEnv({ env, credentials_ref: installation.credentials_ref }),
+        thread.target,
+      );
     } catch (error) {
       mapCrmError(error, "sync");
     }
@@ -191,7 +181,7 @@ export const crmOpsReviewDriver: ChannelDriver = {
     }
     try {
       return await answerOpsPrompt(
-        crmClientFromEnv({ env }),
+        crmClientFromEnv({ env, credentials_ref: installation.credentials_ref }),
         thread.target,
         answer,
       );
@@ -217,13 +207,14 @@ export async function mountOpsStream(
   env: NodeJS.ProcessEnv,
   extras: { fetch?: CrmFetch; now?: () => string } = {},
 ) {
-  const scope = crmScopeOf(crmHasToken(env));
+  const scope = crmScopeOf(crmHasToken(env, installation.credentials_ref));
   const streamKey = opsStreamKey(scope);
   if (!host.get("connectors").getStream(installation.id, streamKey)) {
     await host.plugin(crmOpsReviewPlugin, {
       installation_id: installation.id,
       org_id: installation.org_id,
       max_open_tasks: configNumber(installation.config, "max_open_tasks"),
+      credentials_ref: installation.credentials_ref,
       env,
       fetch: extras.fetch,
       now: extras.now,
