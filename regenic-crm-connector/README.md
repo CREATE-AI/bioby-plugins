@@ -18,8 +18,16 @@
 | `REGENIC_CRM_CONNECTOR` 或 `REGENIC_PLUGIN_DIR` | 是 | 让公开引擎加载本私有包 |
 | `REGENIC_CRM_SHARED_SECRET` | 生产必填 | 与 CRM 的 `INTERNAL_AUTH_REGENIC_SHARED_SECRET` 相同。请求头 `X-Internal-Service: regenic` + `X-Regenic-Key`。不要放进 `REGENIC_CRM_TOKEN` |
 | `REGENIC_CRM_TOKEN` | 否 | 提报运营的 **JWT**。有则只拉该账号的待审对象；非法 JWT 必须 `401`，不得降级成全量 |
+| `REGENIC_CRM_REQUEST_TIMEOUT_MS` | 否 | CRM HTTP 截止，默认 `120000`（2 分钟）。须小于内核 poll/sync 超时 |
 
 写回审核人 / 操作者一律由 CRM 记为 `regenic`，与是否带 token 无关。
+
+生产待人工列表可能一次 30s+/数 MB。内核还要加长 poll/sync，否则仍会在 HTTP 成功前被掐掉：
+
+```bash
+export REGENIC_CONNECTOR_POLL_TIMEOUT_MS=120000
+export REGENIC_CONNECTOR_SYNC_TIMEOUT_MS=180000
+```
 
 公开引擎页有安装卡片，但开源仓不会自动发现本包。本机先指到这个目录，再在连接器表单里填 CRM 地址：
 

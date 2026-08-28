@@ -3,11 +3,13 @@ const { describe, it } = require("node:test");
 const {
   CrmApiError,
   CrmClient,
+  CRM_REQUEST_TIMEOUT_MS,
   auditComment,
   crmClientFromConfig,
   crmClientFromEnv,
   crmHasToken,
   crmProbeCatalog,
+  crmRequestTimeoutMs,
   normalizeCrmBaseUrl,
 } = require("../dist");
 const { createFetch, jsonResponse, sampleOpsTask, sampleOrder } = require("./helpers.cjs");
@@ -86,6 +88,16 @@ describe("CrmClient", () => {
     await client.listPendingHumanOrders();
     assert.equal(fetch.calls[0].headers["X-Regenic-Key"], "cluster-secret");
     assert.equal(fetch.calls[0].headers.authorization, "Bearer ops-jwt");
+  });
+
+  it("defaults CRM HTTP timeout to 2 minutes and reads REGENIC_CRM_REQUEST_TIMEOUT_MS", () => {
+    assert.equal(CRM_REQUEST_TIMEOUT_MS, 120_000);
+    assert.equal(crmRequestTimeoutMs({}), 120_000);
+    assert.equal(
+      crmRequestTimeoutMs({ REGENIC_CRM_REQUEST_TIMEOUT_MS: "90000" }),
+      90_000,
+    );
+    assert.equal(crmRequestTimeoutMs({ REGENIC_CRM_REQUEST_TIMEOUT_MS: "0" }), 0);
   });
 
   it("omits authorization when no token is configured", async () => {

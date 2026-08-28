@@ -76,7 +76,9 @@ export function crmProbeCatalog(
 
 export const DEFAULT_MAX_OPEN_TASKS = 50;
 export const DEFAULT_MAX_OPEN_ORDER_REVIEWS = 50;
-export const CRM_REQUEST_TIMEOUT_MS = 15_000;
+export const CRM_REQUEST_TIMEOUT_ENV = "REGENIC_CRM_REQUEST_TIMEOUT_MS";
+/** Default HTTP deadline. Pending-human lists can exceed 30s on production CRM. */
+export const CRM_REQUEST_TIMEOUT_MS = 120_000;
 
 export type CrmFetch = (
   url: string,
@@ -194,6 +196,7 @@ export interface CrmClientOptions {
   token?: string;
   /** CRM `INTERNAL_AUTH_REGENIC_SHARED_SECRET`. Not a user JWT. */
   sharedSecret?: string;
+  timeoutMs?: number;
   fetch?: CrmFetch;
 }
 
@@ -206,6 +209,7 @@ export interface CrmEnvOptions {
 export class CrmClient {
   private readonly baseUrl: string;
   private readonly fetch: CrmFetch;
+  private readonly timeoutMs: number;
 
   constructor(private readonly options: CrmClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
@@ -215,7 +219,10 @@ export class CrmClient {
         "CRM base URL is required. Set it in the connector form.",
       );
     }
-    this.fetch = options.fetch ?? defaultFetch;
+    this.timeoutMs = options.timeoutMs ?? CRM_REQUEST_TIMEOUT_MS;
+    this.fetch =
+      options.fetch ??
+      ((url, init) => defaultFetch(url, init, this.timeoutMs));
   }
 
   get hasToken(): boolean {
@@ -367,8 +374,23 @@ export function crmClientFromConfig(input: {
     baseUrl: resolveCrmBaseUrl(input.config ?? {}, env),
     token: crmTokenFrom(env, input.credentials_ref),
     sharedSecret: crmSharedSecretFrom(env),
+    timeoutMs: crmRequestTimeoutMs(env),
     fetch: input.fetch,
   });
+}
+
+export function crmRequestTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env[CRM_REQUEST_TIMEOUT_ENV]?.trim();
+  if (!raw) {
+    return CRM_REQUEST_TIMEOUT_MS;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  return Math.max(1_000, Math.min(value, 180_000));
 }
 
 export function crmSharedSecretFrom(
@@ -801,10 +823,11 @@ function parseMail(value: unknown): CrmOpsTask["mail"] {
 async function defaultFetch(
   url: string,
   init: { method?: string; headers: Record<string, string>; body?: string },
+  timeoutMs: number = CRM_REQUEST_TIMEOUT_MS,
 ): Promise<CrmFetchResponse> {
   const response = await fetch(url, {
     ...init,
-    signal: AbortSignal.timeout(CRM_REQUEST_TIMEOUT_MS),
+    ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
   });
   return {
     ok: response.ok,
