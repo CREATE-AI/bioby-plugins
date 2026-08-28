@@ -2,22 +2,34 @@
 
 私有 Regenic 渠道插件。公开默认构建不要注册。
 
+## 连接器配置
+
+安装 / 编辑连接器时在 Engine 表单填写，不要用启动环境变量指定 CRM 地址。
+
+| 字段 | 必填 | 作用 |
+|---|---|---|
+| `base_url` | 是 | CRM 内网基址，须含 `/api`，例如 `https://crm-host/api` |
+| `max_open_tasks` / `max_open_order_reviews` | 否 | 同时打开上限，默认 50 |
+
 ## 环境变量
 
 | 变量 | 必填 | 作用 |
 |---|---|---|
-| `REGENIC_CRM_BASE_URL` | 是 | CRM 内网基址，须含 `/api`，例如 `https://crm-host/api` |
+| `REGENIC_CRM_CONNECTOR` 或 `REGENIC_PLUGIN_DIR` | 是 | 让公开引擎加载本私有包 |
 | `REGENIC_CRM_TOKEN` | 否 | 有则只拉该提报运营的待审对象；非法 token 必须 `401`，不得降级成全量 |
 
 写回审核人 / 操作者一律由 CRM 记为 `regenic`，与是否带 token 无关。
 
-公开引擎页有安装卡片，但开源仓不会自动发现本包。本机先指到这个目录再设 CRM 地址：
+公开引擎页有安装卡片，但开源仓不会自动发现本包。本机先指到这个目录，再在连接器表单里填 CRM 地址：
 
 ```bash
 export REGENIC_CRM_CONNECTOR="$HOME/Documents/git/bioby-plugins/regenic-crm-connector"
 # 或：export REGENIC_PLUGIN_DIR="$HOME/Documents/git/bioby-plugins"
-export REGENIC_CRM_BASE_URL="https://crm-host/api"
 ```
+
+运营和订单是两张 singleton 卡片，同一 CRM 要各填一次 `base_url`，不要互相读对方的 installation。
+
+旧安装若只设了 `REGENIC_CRM_BASE_URL`、config 里没有 `base_url`，sync 仍会回退环境变量。点编辑保存时必须在表单填写含 `/api` 的地址，否则会失败。
 
 ## 内部挂载
 
@@ -37,11 +49,13 @@ drivers.register(crmOrderReviewDriver);
 await host.plugin(crmOpsReviewPlugin, {
   installation_id,
   org_id,
+  base_url: "https://crm-host/api",
   env: process.env,
 });
 await host.plugin(crmOrderReviewPlugin, {
   installation_id,
   org_id,
+  base_url: "https://crm-host/api",
   env: process.env,
 });
 ```

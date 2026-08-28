@@ -1,7 +1,7 @@
 import "@regenic/domain";
 import { definePlugin } from "@regenic/plugin-host";
 import {
-  crmClientFromEnv,
+  crmClientFromConfig,
   crmHasToken,
   type CrmFetch,
 } from "./crm-client";
@@ -13,6 +13,7 @@ export interface CrmOpsReviewPluginConfig {
   installation_id: string;
   org_id: string;
   max_open_tasks?: number;
+  base_url?: string;
   credentials_ref?: string;
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
@@ -23,6 +24,7 @@ export interface CrmOrderReviewPluginConfig {
   installation_id: string;
   org_id: string;
   max_open_order_reviews?: number;
+  base_url?: string;
   credentials_ref?: string;
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
@@ -35,7 +37,8 @@ export const crmOpsReviewPlugin = definePlugin<CrmOpsReviewPluginConfig>({
   apply(ctx, config) {
     const env = config.env ?? process.env;
     const connector = new CrmOpsPollConnector(
-      crmClientFromEnv({
+      crmClientFromConfig({
+        config: config.base_url ? { base_url: config.base_url } : {},
         env,
         fetch: config.fetch,
         credentials_ref: config.credentials_ref,
@@ -65,7 +68,8 @@ export const crmOrderReviewPlugin = definePlugin<CrmOrderReviewPluginConfig>({
   apply(ctx, config) {
     const env = config.env ?? process.env;
     const connector = new CrmOrderPollConnector(
-      crmClientFromEnv({
+      crmClientFromConfig({
+        config: config.base_url ? { base_url: config.base_url } : {},
         env,
         fetch: config.fetch,
         credentials_ref: config.credentials_ref,

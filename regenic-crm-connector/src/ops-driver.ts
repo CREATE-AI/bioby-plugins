@@ -10,13 +10,18 @@ import {
 } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import {
-  CRM_BASE_URL_ENV,
   CRM_TOKEN_ENV,
+  configNumber,
+  configString,
+  crmCatalogFields,
   crmCatalogPrerequisites,
-  crmClientFromEnv,
+  crmClientFromConfig,
   crmHasToken,
+  crmInstallDetail,
+  crmProbeCatalog,
   DEFAULT_MAX_OPEN_TASKS,
   mapCrmError,
+  requireCrmBaseUrl,
   type CrmFetch,
 } from "./crm-client";
 import {
@@ -88,9 +93,9 @@ export const crmOpsReviewDriver: ChannelDriver = {
       channel_label: CRM_CHANNEL_LABEL,
       description:
         "Private plugin. Pulls email-submit PENDING_REVIEW tasks; DSH decides, the connector completes.",
-      credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
+      credential_hint: "CRM base URL in the form; REGENIC_CRM_TOKEN optional",
       singleton: true,
-      fields: [
+      fields: crmCatalogFields([
         {
           key: "max_open_tasks",
           label: "Max open tasks",
@@ -98,7 +103,7 @@ export const crmOpsReviewDriver: ChannelDriver = {
           default: "50",
           placeholder: "50",
         },
-      ],
+      ]),
       prerequisites: crmCatalogPrerequisites(),
     };
   },
@@ -108,24 +113,12 @@ export const crmOpsReviewDriver: ChannelDriver = {
   presentInstall(installation) {
     return {
       label: "Email submit review",
-      detail: configString(installation.config, "max_open_tasks") ?? "50",
+      detail: crmInstallDetail(installation.config, "max_open_tasks", "50"),
     };
   },
 
   async probeCatalog({ env }) {
-    const ready = Boolean(env[CRM_BASE_URL_ENV]?.trim());
-    return {
-      services: {
-        "crm-connector": {
-          ready: true,
-          hint: "Private CRM connector is loaded.",
-        },
-        crm: {
-          ready,
-          hint: ready ? undefined : `Set ${CRM_BASE_URL_ENV}`,
-        },
-      },
-    };
+    return crmProbeCatalog(env);
   },
 
   async resolveConversationLabels(installation, threads, env) {
@@ -137,7 +130,8 @@ export const crmOpsReviewDriver: ChannelDriver = {
       return labels;
     }
     try {
-      const client = crmClientFromEnv({
+      const client = crmClientFromConfig({
+        config: installation.config,
         env,
         credentials_ref: installation.credentials_ref,
       });
@@ -164,7 +158,11 @@ export const crmOpsReviewDriver: ChannelDriver = {
     }
     try {
       return await listOpsPrompts(
-        crmClientFromEnv({ env, credentials_ref: installation.credentials_ref }),
+        crmClientFromConfig({
+          config: installation.config,
+          env,
+          credentials_ref: installation.credentials_ref,
+        }),
         thread.target,
       );
     } catch (error) {
@@ -181,7 +179,11 @@ export const crmOpsReviewDriver: ChannelDriver = {
     }
     try {
       return await answerOpsPrompt(
-        crmClientFromEnv({ env, credentials_ref: installation.credentials_ref }),
+        crmClientFromConfig({
+          config: installation.config,
+          env,
+          credentials_ref: installation.credentials_ref,
+        }),
         thread.target,
         answer,
       );
@@ -198,7 +200,10 @@ export function opsInstallConfig(
   if (!Number.isInteger(max) || max < 1) {
     throw new ChannelDriverError("invalid_config", "max_open_tasks must be a positive integer");
   }
-  return { max_open_tasks: String(max) };
+  return {
+    base_url: requireCrmBaseUrl(config),
+    max_open_tasks: String(max),
+  };
 }
 
 export async function mountOpsStream(
@@ -214,6 +219,7 @@ export async function mountOpsStream(
       installation_id: installation.id,
       org_id: installation.org_id,
       max_open_tasks: configNumber(installation.config, "max_open_tasks"),
+      base_url: configString(installation.config, "base_url"),
       credentials_ref: installation.credentials_ref,
       env,
       fetch: extras.fetch,
@@ -221,27 +227,4 @@ export async function mountOpsStream(
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);
-}
-
-function configString(
-  config: Record<string, unknown>,
-  name: string,
-): string | undefined {
-  const value = config[name];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function configNumber(
-  config: Record<string, unknown>,
-  name: string,
-): number | undefined {
-  const value = config[name];
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value.trim());
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
 }
