@@ -1,4 +1,4 @@
-import { ChannelDriverError } from "@regenic/domain";
+import { ChannelDriverError, type DriverCatalogField } from "@regenic/domain";
 import type {
   OpsCompleteAction,
   OrderReviewResult,
@@ -8,15 +8,20 @@ export const CRM_BASE_URL_ENV = "REGENIC_CRM_BASE_URL";
 export const CRM_TOKEN_ENV = "REGENIC_CRM_TOKEN";
 export const CRM_REVIEWER = "regenic";
 
-export function crmCatalogPrerequisites() {
+export function crmCatalogFields(extra: DriverCatalogField[] = []): DriverCatalogField[] {
   return [
     {
-      kind: "env" as const,
-      key: CRM_BASE_URL_ENV,
+      key: "base_url",
       label: "CRM base URL",
       required: true,
-      hint: `Set ${CRM_BASE_URL_ENV} before starting the desktop, including /api, e.g. https://crm-host/api. The form does not take it.`,
+      placeholder: "https://crm-host/api",
     },
+    ...extra,
+  ];
+}
+
+export function crmCatalogPrerequisites() {
+  return [
     {
       kind: "env" as const,
       key: CRM_TOKEN_ENV,
@@ -162,7 +167,7 @@ export class CrmClient {
     if (!this.baseUrl) {
       throw new ChannelDriverError(
         "invalid_config",
-        `${CRM_BASE_URL_ENV} is required`,
+        "CRM base URL is required. Set it in the connector form.",
       );
     }
     this.fetch = options.fetch ?? defaultFetch;
@@ -290,20 +295,107 @@ export class CrmClient {
   }
 }
 
-export function crmClientFromEnv(input: CrmEnvOptions = {}): CrmClient {
+export function crmClientFromConfig(input: {
+  config?: Record<string, unknown>;
+  env?: NodeJS.ProcessEnv;
+  fetch?: CrmFetch;
+} = {}): CrmClient {
   const env = input.env ?? process.env;
-  const baseUrl = env[CRM_BASE_URL_ENV]?.trim();
-  if (!baseUrl) {
-    throw new ChannelDriverError(
-      "invalid_config",
-      `${CRM_BASE_URL_ENV} is required`,
-    );
-  }
   return new CrmClient({
-    baseUrl,
+    baseUrl: resolveCrmBaseUrl(input.config ?? {}, env),
     token: env[CRM_TOKEN_ENV],
     fetch: input.fetch,
   });
+}
+
+/** @deprecated Prefer connector config `base_url`. Kept for old installs that still use the env. */
+export function crmClientFromEnv(input: CrmEnvOptions = {}): CrmClient {
+  return crmClientFromConfig({ env: input.env, fetch: input.fetch });
+}
+
+export function requireCrmBaseUrl(config: Record<string, unknown>): string {
+  const raw = configString(config, "base_url");
+  if (!raw) {
+    throw new ChannelDriverError(
+      "invalid_config",
+      "CRM base URL is required. Set it in the connector form.",
+    );
+  }
+  return normalizeCrmBaseUrl(raw);
+}
+
+export function resolveCrmBaseUrl(
+  config: Record<string, unknown> = {},
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const raw = configString(config, "base_url") || env[CRM_BASE_URL_ENV]?.trim();
+  if (!raw) {
+    throw new ChannelDriverError(
+      "invalid_config",
+      "CRM base URL is required. Set it in the connector form.",
+    );
+  }
+  return normalizeCrmBaseUrl(raw);
+}
+
+export function normalizeCrmBaseUrl(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new ChannelDriverError(
+      "invalid_config",
+      "CRM base URL must be an http(s) URL, including /api",
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ChannelDriverError(
+      "invalid_config",
+      "CRM base URL must be an http(s) URL, including /api",
+    );
+  }
+  return trimmed;
+}
+
+export function crmInstallDetail(
+  config: Record<string, unknown>,
+  maxKey: string,
+  fallbackMax: string,
+): string {
+  const max = configString(config, maxKey) ?? fallbackMax;
+  const baseUrl = configString(config, "base_url");
+  if (!baseUrl) {
+    return max;
+  }
+  try {
+    return `${new URL(baseUrl).host} · ${max}`;
+  } catch {
+    return `${baseUrl} · ${max}`;
+  }
+}
+
+export function configString(
+  config: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  const value = config[name];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function configNumber(
+  config: Record<string, unknown>,
+  name: string,
+): number | undefined {
+  const value = config[name];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 export function crmHasToken(env: NodeJS.ProcessEnv = process.env): boolean {

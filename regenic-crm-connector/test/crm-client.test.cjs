@@ -4,6 +4,7 @@ const {
   CrmApiError,
   CrmClient,
   auditComment,
+  crmClientFromConfig,
 } = require("../dist");
 const { createFetch, jsonResponse, sampleOpsTask, sampleOrder } = require("./helpers.cjs");
 
@@ -171,6 +172,22 @@ describe("CrmClient", () => {
     assert.match(
       auditComment({ queue: "order", hasToken: false, promptText: "通过" }),
       /source=regenic-order-review\ntoken=no\n通过/,
+    );
+  });
+
+  it("reads the CRM base URL from connector config before env", async () => {
+    const fetch = createFetch({
+      "GET /api/internal/regenic/pending-ops-tasks": jsonResponse(200, { items: [] }),
+    });
+    const client = crmClientFromConfig({
+      config: { base_url: "https://from-form.example/api/" },
+      env: { REGENIC_CRM_BASE_URL: "https://from-env.example/api" },
+      fetch,
+    });
+    await client.listPendingOpsTasks();
+    assert.equal(
+      fetch.calls[0].url,
+      "https://from-form.example/api/internal/regenic/pending-ops-tasks",
     );
   });
 });

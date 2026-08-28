@@ -1,7 +1,7 @@
 import "@regenic/domain";
 import { definePlugin } from "@regenic/plugin-host";
 import {
-  crmClientFromEnv,
+  crmClientFromConfig,
   crmHasToken,
   type CrmFetch,
 } from "./crm-client";
@@ -13,6 +13,7 @@ export interface CrmOpsReviewPluginConfig {
   installation_id: string;
   org_id: string;
   max_open_tasks?: number;
+  base_url?: string;
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
   now?: () => string;
@@ -22,6 +23,7 @@ export interface CrmOrderReviewPluginConfig {
   installation_id: string;
   org_id: string;
   max_open_order_reviews?: number;
+  base_url?: string;
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
   now?: () => string;
@@ -32,12 +34,19 @@ export const crmOpsReviewPlugin = definePlugin<CrmOpsReviewPluginConfig>({
   inject: ["connectors"],
   apply(ctx, config) {
     const env = config.env ?? process.env;
-    const connector = new CrmOpsPollConnector(crmClientFromEnv({ env, fetch: config.fetch }), {
-      connector_id: config.installation_id,
-      org_id: config.org_id,
-      max_open_tasks: config.max_open_tasks,
-      now: config.now,
-    });
+    const connector = new CrmOpsPollConnector(
+      crmClientFromConfig({
+        config: config.base_url ? { base_url: config.base_url } : {},
+        env,
+        fetch: config.fetch,
+      }),
+      {
+        connector_id: config.installation_id,
+        org_id: config.org_id,
+        max_open_tasks: config.max_open_tasks,
+        now: config.now,
+      },
+    );
     const scope = crmScopeOf(crmHasToken(env));
     ctx.effect(() =>
       ctx.get("connectors").register(config.installation_id, connector, {
@@ -56,7 +65,11 @@ export const crmOrderReviewPlugin = definePlugin<CrmOrderReviewPluginConfig>({
   apply(ctx, config) {
     const env = config.env ?? process.env;
     const connector = new CrmOrderPollConnector(
-      crmClientFromEnv({ env, fetch: config.fetch }),
+      crmClientFromConfig({
+        config: config.base_url ? { base_url: config.base_url } : {},
+        env,
+        fetch: config.fetch,
+      }),
       {
         connector_id: config.installation_id,
         org_id: config.org_id,

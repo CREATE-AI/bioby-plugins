@@ -175,7 +175,7 @@ metadata 可另存结构化 JSON，P0 验收不依赖桌面能画 JSON。
 
 未分配提报运营的任务：只出现在无 token。`max_open_tasks` 默认 50。
 
-环境变量：`REGENIC_CRM_BASE_URL` 必填，`REGENIC_CRM_TOKEN` 选填。
+连接器表单：`base_url` 必填（含 `/api`）。环境变量：`REGENIC_CRM_TOKEN` 选填。不要用启动环境变量指定 CRM 地址。
 
 ### 10.2 对账
 

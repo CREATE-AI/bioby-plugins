@@ -9,12 +9,16 @@ import {
 } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import {
-  CRM_BASE_URL_ENV,
+  configNumber,
+  configString,
+  crmCatalogFields,
   crmCatalogPrerequisites,
-  crmClientFromEnv,
+  crmClientFromConfig,
   crmHasToken,
+  crmInstallDetail,
   DEFAULT_MAX_OPEN_ORDER_REVIEWS,
   mapCrmError,
+  requireCrmBaseUrl,
   type CrmFetch,
 } from "./crm-client";
 import {
@@ -104,9 +108,9 @@ export const crmOrderReviewDriver: ChannelDriver = {
       title: "CRM order review",
       description:
         "Private plugin. Pulls orders whose AI internal review is waiting for a human.",
-      credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
+      credential_hint: "CRM base URL in the form; REGENIC_CRM_TOKEN optional",
       singleton: true,
-      fields: [
+      fields: crmCatalogFields([
         {
           key: "max_open_order_reviews",
           label: "Max open order reviews",
@@ -114,7 +118,7 @@ export const crmOrderReviewDriver: ChannelDriver = {
           default: "50",
           placeholder: "50",
         },
-      ],
+      ]),
       prerequisites: crmCatalogPrerequisites(),
     };
   },
@@ -124,21 +128,16 @@ export const crmOrderReviewDriver: ChannelDriver = {
   presentInstall(installation) {
     return {
       label: "Order internal review",
-      detail: configString(installation.config, "max_open_order_reviews") ?? "50",
+      detail: crmInstallDetail(installation.config, "max_open_order_reviews", "50"),
     };
   },
 
-  async probeCatalog({ env }) {
-    const ready = Boolean(env[CRM_BASE_URL_ENV]?.trim());
+  async probeCatalog() {
     return {
       services: {
         "crm-connector": {
           ready: true,
-          hint: "Private CRM connector is loaded.",
-        },
-        crm: {
-          ready,
-          hint: ready ? undefined : `Set ${CRM_BASE_URL_ENV}`,
+          hint: "Private CRM connector is loaded. Set the CRM base URL in the connector form.",
         },
       },
     };
@@ -153,7 +152,7 @@ export const crmOrderReviewDriver: ChannelDriver = {
       return labels;
     }
     try {
-      const client = crmClientFromEnv({ env });
+      const client = crmClientFromConfig({ config: installation.config, env });
       await Promise.all(
         wanted.map(async (thread) => {
           const orderId = thread.target.slice("order:".length);
@@ -176,7 +175,10 @@ export const crmOrderReviewDriver: ChannelDriver = {
       return [];
     }
     try {
-      return await listOrderPrompts(crmClientFromEnv({ env }), thread.target);
+      return await listOrderPrompts(
+        crmClientFromConfig({ config: installation.config, env }),
+        thread.target,
+      );
     } catch (error) {
       mapCrmError(error, "sync");
     }
@@ -191,7 +193,7 @@ export const crmOrderReviewDriver: ChannelDriver = {
     }
     try {
       return await answerOrderPrompt(
-        crmClientFromEnv({ env }),
+        crmClientFromConfig({ config: installation.config, env }),
         thread.target,
         answer,
       );
@@ -212,7 +214,10 @@ export function orderInstallConfig(
       "max_open_order_reviews must be a positive integer",
     );
   }
-  return { max_open_order_reviews: String(max) };
+  return {
+    base_url: requireCrmBaseUrl(config),
+    max_open_order_reviews: String(max),
+  };
 }
 
 export async function mountOrderStream(
@@ -228,33 +233,11 @@ export async function mountOrderStream(
       installation_id: installation.id,
       org_id: installation.org_id,
       max_open_order_reviews: configNumber(installation.config, "max_open_order_reviews"),
+      base_url: configString(installation.config, "base_url"),
       env,
       fetch: extras.fetch,
       now: extras.now,
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);
-}
-
-function configString(
-  config: Record<string, unknown>,
-  name: string,
-): string | undefined {
-  const value = config[name];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function configNumber(
-  config: Record<string, unknown>,
-  name: string,
-): number | undefined {
-  const value = config[name];
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value.trim());
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
 }

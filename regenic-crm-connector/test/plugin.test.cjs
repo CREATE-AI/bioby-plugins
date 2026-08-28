@@ -10,10 +10,6 @@ const {
 } = require("../dist");
 const { createFetch, jsonResponse, sampleOpsTask } = require("./helpers.cjs");
 
-const env = {
-  REGENIC_CRM_BASE_URL: "https://crm.internal",
-};
-
 describe("CRM drivers and plugins", () => {
   it("splits ownsThread by locator prefix and refuses egress", async () => {
     const ops = {
@@ -73,7 +69,7 @@ describe("CRM drivers and plugins", () => {
     const plugin = await host.plugin(crmOpsReviewPlugin, {
       installation_id: "crm-1",
       org_id: "local-owner",
-      env,
+      base_url: "https://crm.internal",
       fetch: createFetch({
         "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
           items: [sampleOpsTask()],
@@ -119,14 +115,17 @@ describe("CRM drivers and plugins", () => {
     const order = crmOrderReviewDriver.installCatalog();
     assert.equal(ops.title, "CRM ops review");
     assert.equal(ops.singleton, true);
-    assert.equal(ops.fields[0].key, "max_open_tasks");
+    assert.equal(ops.fields[0].key, "base_url");
+    assert.equal(ops.fields[0].required, true);
+    assert.equal(ops.fields[1].key, "max_open_tasks");
     assert.equal(
-      ops.prerequisites.some((item) => item.key === "REGENIC_CRM_BASE_URL" && item.required),
-      true,
+      ops.prerequisites.some((item) => item.key === "REGENIC_CRM_BASE_URL"),
+      false,
     );
     assert.equal(order.title, "CRM order review");
     assert.equal(order.singleton, true);
-    assert.equal(order.fields[0].key, "max_open_order_reviews");
+    assert.equal(order.fields[0].key, "base_url");
+    assert.equal(order.fields[1].key, "max_open_order_reviews");
     assert.deepEqual(crmOrderReviewDriver.writeBackLabels("REJECTED"), [
       "REJECTED",
       "不通过",
@@ -140,11 +139,42 @@ describe("CRM drivers and plugins", () => {
       org_id: "local-owner",
       connector_type: "crm-ops-review",
       status: "enabled",
-      config: { max_open_tasks: "50" },
+      config: {
+        base_url: "https://crm.internal/api",
+        max_open_tasks: "50",
+      },
       created_at: "2026-08-26T00:00:00.000Z",
     }), {
       label: "Email submit review",
-      detail: "50",
+      detail: "crm.internal · 50",
     });
+  });
+
+  it("stores the CRM base URL on the connector install, not an env var", () => {
+    const installed = crmOrderReviewDriver.install({
+      id: "order-1",
+      org_id: "local-owner",
+      config: {
+        base_url: "https://crm.internal/api/",
+        max_open_order_reviews: "20",
+      },
+      now: "2026-08-26T00:00:00.000Z",
+    });
+    assert.deepEqual(installed.config, {
+      base_url: "https://crm.internal/api",
+      max_open_order_reviews: "20",
+    });
+    assert.throws(
+      () =>
+        crmOpsReviewDriver.install({
+          id: "ops-1",
+          org_id: "local-owner",
+          config: { max_open_tasks: "50" },
+          now: "2026-08-26T00:00:00.000Z",
+        }),
+      (error) =>
+        error instanceof ChannelDriverError &&
+        error.message.includes("connector form"),
+    );
   });
 });
