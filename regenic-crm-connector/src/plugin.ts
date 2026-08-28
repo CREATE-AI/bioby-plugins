@@ -14,6 +14,7 @@ export interface CrmOpsReviewPluginConfig {
   org_id: string;
   max_open_tasks?: number;
   base_url?: string;
+  credentials_ref?: string;
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
   now?: () => string;
@@ -24,6 +25,7 @@ export interface CrmOrderReviewPluginConfig {
   org_id: string;
   max_open_order_reviews?: number;
   base_url?: string;
+  credentials_ref?: string;
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
   now?: () => string;
@@ -39,6 +41,7 @@ export const crmOpsReviewPlugin = definePlugin<CrmOpsReviewPluginConfig>({
         config: config.base_url ? { base_url: config.base_url } : {},
         env,
         fetch: config.fetch,
+        credentials_ref: config.credentials_ref,
       }),
       {
         connector_id: config.installation_id,
@@ -47,7 +50,7 @@ export const crmOpsReviewPlugin = definePlugin<CrmOpsReviewPluginConfig>({
         now: config.now,
       },
     );
-    const scope = crmScopeOf(crmHasToken(env));
+    const scope = crmScopeOf(crmHasToken(env, config.credentials_ref));
     ctx.effect(() =>
       ctx.get("connectors").register(config.installation_id, connector, {
         stream_key: opsStreamKey(scope),
@@ -69,6 +72,7 @@ export const crmOrderReviewPlugin = definePlugin<CrmOrderReviewPluginConfig>({
         config: config.base_url ? { base_url: config.base_url } : {},
         env,
         fetch: config.fetch,
+        credentials_ref: config.credentials_ref,
       }),
       {
         connector_id: config.installation_id,
@@ -77,7 +81,7 @@ export const crmOrderReviewPlugin = definePlugin<CrmOrderReviewPluginConfig>({
         now: config.now,
       },
     );
-    const scope = crmScopeOf(crmHasToken(env));
+    const scope = crmScopeOf(crmHasToken(env, config.credentials_ref));
     ctx.effect(() =>
       ctx.get("connectors").register(config.installation_id, connector, {
         stream_key: orderStreamKey(scope),

@@ -5,6 +5,8 @@ const {
   CrmClient,
   auditComment,
   crmClientFromConfig,
+  crmClientFromEnv,
+  crmHasToken,
   crmProbeCatalog,
   normalizeCrmBaseUrl,
 } = require("../dist");
@@ -25,6 +27,28 @@ describe("CrmClient", () => {
       (error) => error instanceof CrmApiError && error.status === 401,
     );
     assert.match(fetch.calls[0].headers.authorization, /^Bearer user-token$/);
+  });
+
+  it("reads the optional token from credentials_ref, not config", async () => {
+    const fetch = createFetch({
+      "GET /api/internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [sampleOpsTask()],
+      }),
+    });
+    const env = {
+      REGENIC_CRM_BASE_URL: "https://crm.internal/api",
+      REGENIC_CRM_TOKEN: "env-token",
+    };
+    const client = crmClientFromEnv({
+      env,
+      fetch,
+      credentials_ref: "env:REGENIC_CRM_TOKEN",
+    });
+    await client.listPendingOpsTasks();
+    assert.equal(fetch.calls[0].headers.authorization, "Bearer env-token");
+    assert.equal(crmHasToken(env, "env:REGENIC_CRM_TOKEN"), true);
+    assert.equal(crmHasToken(env, "keychain:crm"), false);
+    assert.equal(crmHasToken({ REGENIC_CRM_BASE_URL: "https://crm.internal" }), false);
   });
 
   it("omits authorization when no token is configured", async () => {

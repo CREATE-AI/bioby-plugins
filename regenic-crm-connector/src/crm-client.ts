@@ -1,5 +1,6 @@
 import {
   ChannelDriverError,
+  readEnvCredential,
   type ConnectorCatalogProbe,
   type DriverCatalogField,
 } from "@regenic/domain";
@@ -185,6 +186,7 @@ export interface CrmClientOptions {
 export interface CrmEnvOptions {
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
+  credentials_ref?: string;
 }
 
 export class CrmClient {
@@ -324,22 +326,34 @@ export class CrmClient {
   }
 }
 
+export function crmTokenFrom(
+  env: NodeJS.ProcessEnv = process.env,
+  credentialsRef?: string,
+): string | undefined {
+  return readEnvCredential(credentialsRef, env, CRM_TOKEN_ENV);
+}
+
 export function crmClientFromConfig(input: {
   config?: Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
+  credentials_ref?: string;
 } = {}): CrmClient {
   const env = input.env ?? process.env;
   return new CrmClient({
     baseUrl: resolveCrmBaseUrl(input.config ?? {}, env),
-    token: env[CRM_TOKEN_ENV],
+    token: crmTokenFrom(env, input.credentials_ref),
     fetch: input.fetch,
   });
 }
 
 /** @deprecated Prefer connector config `base_url`. Kept for old installs that still use the env. */
 export function crmClientFromEnv(input: CrmEnvOptions = {}): CrmClient {
-  return crmClientFromConfig({ env: input.env, fetch: input.fetch });
+  return crmClientFromConfig({
+    env: input.env,
+    fetch: input.fetch,
+    credentials_ref: input.credentials_ref,
+  });
 }
 
 export function requireCrmBaseUrl(config: Record<string, unknown>): string {
@@ -434,8 +448,11 @@ export function configNumber(
   return undefined;
 }
 
-export function crmHasToken(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env[CRM_TOKEN_ENV]?.trim());
+export function crmHasToken(
+  env: NodeJS.ProcessEnv = process.env,
+  credentialsRef?: string,
+): boolean {
+  return Boolean(crmTokenFrom(env, credentialsRef));
 }
 
 export function isEmailSubmitPending(task: CrmOpsTask): boolean {

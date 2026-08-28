@@ -1,14 +1,16 @@
 import {
+  CONNECTOR_PROTOCOL,
   ChannelDriverError,
+  envCredentialsRef,
   requireConnectorStream,
   type ChannelDriver,
   type ConnectorInstallation,
-  type ConversationThread,
   type JsonValue,
   type NewConnectorInstallation,
 } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import {
+  CRM_TOKEN_ENV,
   configNumber,
   configString,
   crmCatalogFields,
@@ -23,6 +25,7 @@ import {
   type CrmFetch,
 } from "./crm-client";
 import {
+  CRM_CHANNEL_LABEL,
   CRM_SOURCE,
   crmScopeOf,
   isOrderTarget,
@@ -37,6 +40,7 @@ import { orderConversationLabel } from "./records";
 export const crmOrderReviewDriver: ChannelDriver = {
   connector_type: ORDER_CONNECTOR_TYPE,
   source: CRM_SOURCE,
+  connector_protocol: CONNECTOR_PROTOCOL,
 
   install(input): NewConnectorInstallation {
     return {
@@ -45,6 +49,7 @@ export const crmOrderReviewDriver: ChannelDriver = {
       connector_type: ORDER_CONNECTOR_TYPE,
       status: "enabled",
       config: orderInstallConfig(input.config),
+      credentials_ref: envCredentialsRef(CRM_TOKEN_ENV),
       created_at: input.now,
     };
   },
@@ -74,17 +79,6 @@ export const crmOrderReviewDriver: ChannelDriver = {
     };
   },
 
-  canReply() {
-    return false;
-  },
-
-  async createThread() {
-    throw new ChannelDriverError(
-      "unsupported_channel",
-      "Creating a CRM order is not available",
-    );
-  },
-
   async resolveStreams(installation, host, env) {
     return [await mountOrderStream(host, installation, env)];
   },
@@ -93,20 +87,10 @@ export const crmOrderReviewDriver: ChannelDriver = {
     return mountOrderStream(host, installation, env);
   },
 
-  async bindEgress() {
-    throw new ChannelDriverError(
-      "unsupported_channel",
-      "CRM order review must go through answerPrompt, not egress",
-    );
-  },
-
-  outboundId(thread: ConversationThread) {
-    return `${thread.target}:out:local`;
-  },
-
   installCatalog() {
     return {
       title: "CRM order review",
+      channel_label: CRM_CHANNEL_LABEL,
       description:
         "Private plugin. Pulls orders whose AI internal review is waiting for a human.",
       credential_hint: "CRM base URL in the form; REGENIC_CRM_TOKEN optional",
@@ -146,7 +130,11 @@ export const crmOrderReviewDriver: ChannelDriver = {
       return labels;
     }
     try {
-      const client = crmClientFromConfig({ config: installation.config, env });
+      const client = crmClientFromConfig({
+        config: installation.config,
+        env,
+        credentials_ref: installation.credentials_ref,
+      });
       await Promise.all(
         wanted.map(async (thread) => {
           const orderId = thread.target.slice("order:".length);
@@ -170,7 +158,11 @@ export const crmOrderReviewDriver: ChannelDriver = {
     }
     try {
       return await listOrderPrompts(
-        crmClientFromConfig({ config: installation.config, env }),
+        crmClientFromConfig({
+          config: installation.config,
+          env,
+          credentials_ref: installation.credentials_ref,
+        }),
         thread.target,
       );
     } catch (error) {
@@ -187,7 +179,11 @@ export const crmOrderReviewDriver: ChannelDriver = {
     }
     try {
       return await answerOrderPrompt(
-        crmClientFromConfig({ config: installation.config, env }),
+        crmClientFromConfig({
+          config: installation.config,
+          env,
+          credentials_ref: installation.credentials_ref,
+        }),
         thread.target,
         answer,
       );
@@ -220,7 +216,7 @@ export async function mountOrderStream(
   env: NodeJS.ProcessEnv,
   extras: { fetch?: CrmFetch; now?: () => string } = {},
 ) {
-  const scope = crmScopeOf(crmHasToken(env));
+  const scope = crmScopeOf(crmHasToken(env, installation.credentials_ref));
   const streamKey = orderStreamKey(scope);
   if (!host.get("connectors").getStream(installation.id, streamKey)) {
     await host.plugin(crmOrderReviewPlugin, {
@@ -228,6 +224,7 @@ export async function mountOrderStream(
       org_id: installation.org_id,
       max_open_order_reviews: configNumber(installation.config, "max_open_order_reviews"),
       base_url: configString(installation.config, "base_url"),
+      credentials_ref: installation.credentials_ref,
       env,
       fetch: extras.fetch,
       now: extras.now,
