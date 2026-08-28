@@ -69,9 +69,9 @@ describe("CRM drivers and plugins", () => {
     const plugin = await host.plugin(crmOpsReviewPlugin, {
       installation_id: "crm-1",
       org_id: "local-owner",
-      base_url: "https://crm.internal",
+      base_url: "https://crm.internal/api",
       fetch: createFetch({
-        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        "GET /api/internal/regenic/pending-ops-tasks": jsonResponse(200, {
           items: [sampleOpsTask()],
         }),
       }),
@@ -134,6 +134,10 @@ describe("CRM drivers and plugins", () => {
       "APPROVED",
       "通过",
     ]);
+    assert.equal(
+      ops.prerequisites.some((item) => item.kind === "local_service"),
+      false,
+    );
     assert.deepEqual(crmOpsReviewDriver.presentInstall({
       id: "crm-1",
       org_id: "local-owner",
@@ -175,6 +179,18 @@ describe("CRM drivers and plugins", () => {
       (error) =>
         error instanceof ChannelDriverError &&
         error.message.includes("connector form"),
+    );
+    assert.throws(
+      () =>
+        crmOpsReviewDriver.install({
+          id: "ops-1",
+          org_id: "local-owner",
+          config: { base_url: "https://crm.internal", max_open_tasks: "50" },
+          now: "2026-08-26T00:00:00.000Z",
+        }),
+      (error) =>
+        error instanceof ChannelDriverError &&
+        error.message.includes("including /api"),
     );
   });
 });

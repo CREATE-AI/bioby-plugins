@@ -1,4 +1,8 @@
-import { ChannelDriverError, type DriverCatalogField } from "@regenic/domain";
+import {
+  ChannelDriverError,
+  type ConnectorCatalogProbe,
+  type DriverCatalogField,
+} from "@regenic/domain";
 import type {
   OpsCompleteAction,
   OrderReviewResult,
@@ -30,6 +34,31 @@ export function crmCatalogPrerequisites() {
       hint: "Optional. When set, CRM must scope to that reporting-ops user. A bad token must 401.",
     },
   ];
+}
+
+/**
+ * Catalog probe cannot see the form `base_url`. `crm-connector` means the
+ * private plugin is loaded. `crm` is leftover env only and is not a
+ * prerequisite, so it does not grey the Engine install button.
+ */
+export function crmProbeCatalog(
+  env: NodeJS.ProcessEnv = process.env,
+): ConnectorCatalogProbe {
+  const leftoverUrl = Boolean(env[CRM_BASE_URL_ENV]?.trim());
+  return {
+    services: {
+      "crm-connector": {
+        ready: true,
+        hint: "Private CRM connector is loaded. Set the CRM base URL in the connector form.",
+      },
+      crm: {
+        ready: leftoverUrl,
+        hint: leftoverUrl
+          ? "Legacy REGENIC_CRM_BASE_URL is set. Save the connector form to move it into config."
+          : "CRM base URL is not on the process env. Set it in the connector form.",
+      },
+    },
+  };
 }
 
 export const DEFAULT_MAX_OPEN_TASKS = 50;
@@ -350,6 +379,13 @@ export function normalizeCrmBaseUrl(value: string): string {
     );
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ChannelDriverError(
+      "invalid_config",
+      "CRM base URL must be an http(s) URL, including /api",
+    );
+  }
+  const path = parsed.pathname.replace(/\/+$/, "") || "/";
+  if (path !== "/api" && !path.endsWith("/api")) {
     throw new ChannelDriverError(
       "invalid_config",
       "CRM base URL must be an http(s) URL, including /api",

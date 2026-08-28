@@ -27,6 +27,10 @@ export REGENIC_CRM_CONNECTOR="$HOME/Documents/git/bioby-plugins/regenic-crm-conn
 # 或：export REGENIC_PLUGIN_DIR="$HOME/Documents/git/bioby-plugins"
 ```
 
+运营和订单是两张 singleton 卡片，同一 CRM 要各填一次 `base_url`，不要互相读对方的 installation。
+
+旧安装若只设了 `REGENIC_CRM_BASE_URL`、config 里没有 `base_url`，sync 仍会回退环境变量。点编辑保存时必须在表单填写含 `/api` 的地址，否则会失败。
+
 ## 内部挂载
 
 驱动由公开 API 在能解析到本包时自动 `register`。`host.plugin` 仍由驱动在 sync 时挂上。若要手写：

@@ -5,6 +5,8 @@ const {
   CrmClient,
   auditComment,
   crmClientFromConfig,
+  crmProbeCatalog,
+  normalizeCrmBaseUrl,
 } = require("../dist");
 const { createFetch, jsonResponse, sampleOpsTask, sampleOrder } = require("./helpers.cjs");
 
@@ -189,5 +191,44 @@ describe("CrmClient", () => {
       fetch.calls[0].url,
       "https://from-form.example/api/internal/regenic/pending-ops-tasks",
     );
+  });
+
+  it("falls back to REGENIC_CRM_BASE_URL when the install has no base_url", async () => {
+    const fetch = createFetch({
+      "GET /api/internal/regenic/pending-ops-tasks": jsonResponse(200, { items: [] }),
+    });
+    const client = crmClientFromConfig({
+      config: {},
+      env: { REGENIC_CRM_BASE_URL: "https://from-env.example/api" },
+      fetch,
+    });
+    await client.listPendingOpsTasks();
+    assert.equal(
+      fetch.calls[0].url,
+      "https://from-env.example/api/internal/regenic/pending-ops-tasks",
+    );
+  });
+
+  it("rejects a CRM base URL that is not http(s) or that omits /api", () => {
+    assert.equal(normalizeCrmBaseUrl("https://crm.internal/api/"), "https://crm.internal/api");
+    assert.throws(
+      () => normalizeCrmBaseUrl("https://crm.internal"),
+      (error) => error.message.includes("including /api"),
+    );
+    assert.throws(
+      () => normalizeCrmBaseUrl("ftp://crm.internal/api"),
+      (error) => error.message.includes("including /api"),
+    );
+  });
+
+  it("probes plugin loaded separately from leftover CRM URL env", () => {
+    const empty = crmProbeCatalog({});
+    assert.equal(empty.services["crm-connector"].ready, true);
+    assert.equal(empty.services.crm.ready, false);
+    const leftover = crmProbeCatalog({
+      REGENIC_CRM_BASE_URL: "https://crm.internal/api",
+    });
+    assert.equal(leftover.services["crm-connector"].ready, true);
+    assert.equal(leftover.services.crm.ready, true);
   });
 });

@@ -16,6 +16,7 @@ import {
   crmClientFromConfig,
   crmHasToken,
   crmInstallDetail,
+  crmProbeCatalog,
   DEFAULT_MAX_OPEN_TASKS,
   mapCrmError,
   requireCrmBaseUrl,
@@ -132,15 +133,8 @@ export const crmOpsReviewDriver: ChannelDriver = {
     };
   },
 
-  async probeCatalog() {
-    return {
-      services: {
-        "crm-connector": {
-          ready: true,
-          hint: "Private CRM connector is loaded. Set the CRM base URL in the connector form.",
-        },
-      },
-    };
+  async probeCatalog({ env }) {
+    return crmProbeCatalog(env);
   },
 
   async resolveConversationLabels(installation, threads, env) {
