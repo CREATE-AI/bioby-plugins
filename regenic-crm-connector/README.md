@@ -16,7 +16,8 @@
 | 变量 | 必填 | 作用 |
 |---|---|---|
 | `REGENIC_CRM_CONNECTOR` 或 `REGENIC_PLUGIN_DIR` | 是 | 让公开引擎加载本私有包 |
-| `REGENIC_CRM_TOKEN` | 否 | 有则只拉该提报运营的待审对象；非法 token 必须 `401`，不得降级成全量 |
+| `REGENIC_CRM_SHARED_SECRET` | 生产必填 | 与 CRM 的 `INTERNAL_AUTH_REGENIC_SHARED_SECRET` 相同。请求头 `X-Internal-Service: regenic` + `X-Regenic-Key`。不要放进 `REGENIC_CRM_TOKEN` |
+| `REGENIC_CRM_TOKEN` | 否 | 提报运营的 **JWT**。有则只拉该账号的待审对象；非法 JWT 必须 `401`，不得降级成全量 |
 
 写回审核人 / 操作者一律由 CRM 记为 `regenic`，与是否带 token 无关。
 

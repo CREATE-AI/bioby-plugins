@@ -11,6 +11,10 @@ import type {
 
 export const CRM_BASE_URL_ENV = "REGENIC_CRM_BASE_URL";
 export const CRM_TOKEN_ENV = "REGENIC_CRM_TOKEN";
+export const CRM_SHARED_SECRET_ENV = "REGENIC_CRM_SHARED_SECRET";
+export const CRM_INTERNAL_SERVICE = "regenic";
+export const CRM_INTERNAL_SERVICE_HEADER = "X-Internal-Service";
+export const CRM_INTERNAL_KEY_HEADER = "X-Regenic-Key";
 export const CRM_REVIEWER = "regenic";
 
 export function crmCatalogFields(extra: DriverCatalogField[] = []): DriverCatalogField[] {
@@ -29,10 +33,18 @@ export function crmCatalogPrerequisites() {
   return [
     {
       kind: "env" as const,
+      key: CRM_SHARED_SECRET_ENV,
+      label: "CRM internal shared secret",
+      required: false,
+      hint:
+        "Production CRM: same value as INTERNAL_AUTH_REGENIC_SHARED_SECRET. Sent as X-Regenic-Key, not Authorization.",
+    },
+    {
+      kind: "env" as const,
       key: CRM_TOKEN_ENV,
       label: "CRM reporting-ops token",
       required: false,
-      hint: "Optional. When set, CRM must scope to that reporting-ops user. A bad token must 401.",
+      hint: "Optional JWT. When set, CRM must scope to that reporting-ops user. A bad token must 401. Do not put the shared secret here.",
     },
   ];
 }
@@ -180,6 +192,8 @@ export interface CrmOrder {
 export interface CrmClientOptions {
   baseUrl: string;
   token?: string;
+  /** CRM `INTERNAL_AUTH_REGENIC_SHARED_SECRET`. Not a user JWT. */
+  sharedSecret?: string;
   fetch?: CrmFetch;
 }
 
@@ -211,6 +225,11 @@ export class CrmClient {
   get token(): string | undefined {
     const token = this.options.token?.trim();
     return token || undefined;
+  }
+
+  get sharedSecret(): string | undefined {
+    const secret = this.options.sharedSecret?.trim();
+    return secret || undefined;
   }
 
   async listPendingOpsTasks(): Promise<CrmOpsTask[]> {
@@ -280,6 +299,10 @@ export class CrmClient {
     body?: Record<string, string>,
   ): Promise<unknown> {
     const headers: Record<string, string> = { accept: "application/json" };
+    if (this.sharedSecret) {
+      headers[CRM_INTERNAL_SERVICE_HEADER] = CRM_INTERNAL_SERVICE;
+      headers[CRM_INTERNAL_KEY_HEADER] = this.sharedSecret;
+    }
     if (this.token) {
       headers.authorization = `Bearer ${this.token}`;
     }
@@ -343,8 +366,16 @@ export function crmClientFromConfig(input: {
   return new CrmClient({
     baseUrl: resolveCrmBaseUrl(input.config ?? {}, env),
     token: crmTokenFrom(env, input.credentials_ref),
+    sharedSecret: crmSharedSecretFrom(env),
     fetch: input.fetch,
   });
+}
+
+export function crmSharedSecretFrom(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const secret = env[CRM_SHARED_SECRET_ENV]?.trim();
+  return secret || undefined;
 }
 
 /** @deprecated Prefer connector config `base_url`. Kept for old installs that still use the env. */

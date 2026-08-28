@@ -93,7 +93,8 @@ export const crmOpsReviewDriver: ChannelDriver = {
       channel_label: CRM_CHANNEL_LABEL,
       description:
         "Private plugin. Pulls email-submit PENDING_REVIEW tasks; DSH decides, the connector completes.",
-      credential_hint: "CRM base URL in the form; REGENIC_CRM_TOKEN optional",
+      credential_hint:
+        "CRM base URL in the form; REGENIC_CRM_SHARED_SECRET for prod caller auth; REGENIC_CRM_TOKEN optional JWT",
       singleton: true,
       fields: crmCatalogFields([
         {

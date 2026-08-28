@@ -93,7 +93,8 @@ export const crmOrderReviewDriver: ChannelDriver = {
       channel_label: CRM_CHANNEL_LABEL,
       description:
         "Private plugin. Pulls orders whose AI internal review is waiting for a human.",
-      credential_hint: "CRM base URL in the form; REGENIC_CRM_TOKEN optional",
+      credential_hint:
+        "CRM base URL in the form; REGENIC_CRM_SHARED_SECRET for prod caller auth; REGENIC_CRM_TOKEN optional JWT",
       singleton: true,
       fields: crmCatalogFields([
         {

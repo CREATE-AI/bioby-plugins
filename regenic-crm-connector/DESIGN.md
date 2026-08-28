@@ -167,6 +167,13 @@ metadata 可另存结构化 JSON，P0 验收不依赖桌面能画 JSON。
 
 状态：运营任务 `PENDING_REVIEW`，P0 限 `EMAIL_SUBMIT_AUTOMATION`（及邮件提报待审 kind）。
 
+CRM 两层鉴权互不替代：
+
+| 层 | CRM | 连接器 |
+|---|---|---|
+| 调用方密钥 | 生产 `internal.auth.regenic.enabled=true`，校验 `X-Internal-Service: regenic` + `X-Regenic-Key` = `INTERNAL_AUTH_REGENIC_SHARED_SECRET` | `REGENIC_CRM_SHARED_SECRET`。未开调用方鉴权的本地 CRM 可不设 |
+| JWT 范围 | `Authorization: Bearer`：无 token=全量；非法 token=`401`，不得降级 | `REGENIC_CRM_TOKEN`，必须是用户 JWT，**不是**共享密钥 |
+
 | 连接器 | CRM |
 |---|---|
 | 有 `REGENIC_CRM_TOKEN` | 仅提报运营 = token 用户（任务或其关联 `ProjectField.reportingOperationsUserId`，CRM 写死一种） |
@@ -175,7 +182,7 @@ metadata 可另存结构化 JSON，P0 验收不依赖桌面能画 JSON。
 
 未分配提报运营的任务：只出现在无 token。`max_open_tasks` 默认 50。
 
-连接器表单：`base_url` 必填（含 `/api`）。环境变量：`REGENIC_CRM_TOKEN` 选填。不要用启动环境变量指定 CRM 地址。旧安装仅有 `REGENIC_CRM_BASE_URL` 时 sync 仍回退 env；重新保存必须走表单。
+连接器表单：`base_url` 必填（含 `/api`）。环境变量：生产设 `REGENIC_CRM_SHARED_SECRET`（调用方密钥）；`REGENIC_CRM_TOKEN` 选填（JWT 范围）。不要用启动环境变量指定 CRM 地址。旧安装仅有 `REGENIC_CRM_BASE_URL` 时 sync 仍回退 env；重新保存必须走表单。
 
 ### 10.2 对账
 

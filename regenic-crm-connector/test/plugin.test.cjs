@@ -160,6 +160,14 @@ describe("CRM drivers and plugins", () => {
       ops.prerequisites.some((item) => item.key === "REGENIC_CRM_BASE_URL"),
       false,
     );
+    assert.equal(
+      ops.prerequisites.some((item) => item.key === "REGENIC_CRM_SHARED_SECRET"),
+      true,
+    );
+    assert.equal(
+      ops.prerequisites.some((item) => item.key === "REGENIC_CRM_TOKEN"),
+      true,
+    );
     assert.equal(order.title, "CRM order review");
     assert.equal(order.channel_label, "CRM");
     assert.equal(order.singleton, true);

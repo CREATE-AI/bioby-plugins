@@ -51,6 +51,43 @@ describe("CrmClient", () => {
     assert.equal(crmHasToken({ REGENIC_CRM_BASE_URL: "https://crm.internal" }), false);
   });
 
+  it("sends caller key headers from REGENIC_CRM_SHARED_SECRET, not Authorization", async () => {
+    const fetch = createFetch({
+      "GET /api/internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [sampleOpsTask()],
+      }),
+    });
+    const client = crmClientFromConfig({
+      config: { base_url: "https://crm.internal/api" },
+      env: { REGENIC_CRM_SHARED_SECRET: "cluster-secret" },
+      fetch,
+    });
+    await client.listPendingOpsTasks();
+    assert.equal(fetch.calls[0].headers["X-Internal-Service"], "regenic");
+    assert.equal(fetch.calls[0].headers["X-Regenic-Key"], "cluster-secret");
+    assert.equal(fetch.calls[0].headers.authorization, undefined);
+  });
+
+  it("sends shared secret and JWT independently", async () => {
+    const fetch = createFetch({
+      "GET /api/internal/regenic/pending-human-orders": jsonResponse(200, {
+        items: [sampleOrder()],
+      }),
+    });
+    const client = crmClientFromConfig({
+      config: { base_url: "https://crm.internal/api" },
+      env: {
+        REGENIC_CRM_SHARED_SECRET: "cluster-secret",
+        REGENIC_CRM_TOKEN: "ops-jwt",
+      },
+      credentials_ref: "env:REGENIC_CRM_TOKEN",
+      fetch,
+    });
+    await client.listPendingHumanOrders();
+    assert.equal(fetch.calls[0].headers["X-Regenic-Key"], "cluster-secret");
+    assert.equal(fetch.calls[0].headers.authorization, "Bearer ops-jwt");
+  });
+
   it("omits authorization when no token is configured", async () => {
     const fetch = createFetch({
       "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
