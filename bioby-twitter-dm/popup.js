@@ -8,11 +8,42 @@ const captureText = document.getElementById('captureText');
 const settingsStatus = document.getElementById('settingsStatus');
 const loginInfo = document.getElementById('loginInfo');
 
+const API_ENV = {
+  test: 'https://lmdxqolvnkyj.sealosbja.site',
+  local: 'http://localhost:8081'
+};
+
+const BIG_ACCOUNT = 'admin';
+
+function isAdminId(v) {
+  return String(v || '').trim().toLowerCase() === BIG_ACCOUNT;
+}
+
+function rememberSmallBusinessAccount(raw) {
+  const v = String(raw || '').trim();
+  if (v && !isAdminId(v)) cfg.businessAccount = v;
+}
+
+function storedSmallBusinessAccount() {
+  const v = String(cfg.businessAccount || '').trim();
+  return isAdminId(v) ? '' : v;
+}
+
+function readPopupRole() {
+  const pluginRole = document.getElementById('pluginRole')?.value === 'big' ? 'big' : 'small';
+  rememberSmallBusinessAccount(document.getElementById('businessAccount')?.value);
+  return { pluginRole, businessAccount: storedSmallBusinessAccount() };
+}
+
 let cfg = {
+  apiEnv: 'test',
   apiBase: '',
   campaignId: '',
+  campaignName: '',
   businessAccount: '',
+  pluginRole: 'small',
   username: '',
+  password: '',
   token: '',
   displayName: ''
 };
@@ -20,10 +51,19 @@ let templates = [];
 let leads = [];
 /** 含已联系线索，供收录回复 */
 let captureLeads = [];
+let campaignSearchTimer = null;
 
 function showBanner(text, kind) {
   bannerEl.textContent = text || '';
   bannerEl.className = 'banner' + (text ? '' : ' hidden') + (kind ? ` ${kind}` : '');
+}
+
+function formatExtError(e) {
+  const msg = e?.message || String(e || '');
+  if (/message channel closed|asynchronous response|receiving end does not exist/i.test(msg)) {
+    return '与 X 页面通信中断，请确认已打开并停留在 x.com 后重试';
+  }
+  return msg;
 }
 
 function showSettingsStatus(text, kind) {
@@ -37,12 +77,155 @@ function authHeader() {
   return t.toLowerCase().startsWith('bearer ') ? t : `Bearer ${t}`;
 }
 
+function fillExtVersion() {
+  const version = chrome.runtime?.getManifest?.()?.version || '';
+  const label = version ? `v${version}` : '';
+  document.querySelectorAll('[data-ext-version]').forEach((el) => {
+    el.textContent = label;
+  });
+}
+
+function resolveApiBase(env) {
+  return API_ENV[env === 'local' ? 'local' : 'test'];
+}
+
+function inferApiEnv(apiBase) {
+  const base = String(apiBase || '').toLowerCase();
+  if (base.includes('localhost') || base.includes('127.0.0.1')) return 'local';
+  if (base.includes('lmdxqolvnkyj.sealosbja.site')) return 'test';
+  return 'test';
+}
+
+function normalizeApiEnvCfg() {
+  if (cfg.apiEnv !== 'local' && cfg.apiEnv !== 'test') {
+    cfg.apiEnv = inferApiEnv(cfg.apiBase);
+  }
+  cfg.apiBase = resolveApiBase(cfg.apiEnv);
+}
+
+function readSettingsApiEnv() {
+  const active = document.querySelector('#apiEnvSeg .seg-btn.active');
+  const env = active?.dataset?.apiEnv;
+  return env === 'local' ? 'local' : 'test';
+}
+
+function applySettingsApiEnvUi() {
+  const env = cfg.apiEnv === 'local' ? 'local' : 'test';
+  document.querySelectorAll('#apiEnvSeg .seg-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.apiEnv === env);
+  });
+}
+
+function updateCampaignPickerUi() {
+  const nameEl = document.getElementById('campaignName');
+  const hintEl = document.getElementById('campaignSelectedHint');
+  const idEl = document.getElementById('campaignId');
+  if (!nameEl || !hintEl || !idEl) return;
+  const loggedIn = Boolean(cfg.token);
+  nameEl.disabled = !loggedIn;
+  idEl.value = cfg.campaignId || '';
+  if (cfg.campaignName || cfg.campaignId) {
+    nameEl.value = cfg.campaignName || cfg.campaignId;
+  }
+  if (!loggedIn) {
+    hintEl.textContent = '登录后可搜索并选择活动。';
+  } else if (cfg.campaignId) {
+    hintEl.textContent = `已选活动：${cfg.campaignName || cfg.campaignId}`;
+  } else {
+    hintEl.textContent = '输入关键字筛选活动，点击一条完成选择。';
+  }
+}
+
+function hideCampaignSuggest() {
+  const list = document.getElementById('campaignSuggest');
+  if (list) {
+    list.classList.add('hidden');
+    list.innerHTML = '';
+  }
+}
+
+async function ensureCampaignNameFromId() {
+  if (!cfg.token || !cfg.campaignId || cfg.campaignName) return;
+  try {
+    const data = await api(`/api/campaigns/${encodeURIComponent(cfg.campaignId)}`);
+    const name = data?.projectName || data?.brandName || '';
+    if (name) {
+      await persistCfg({ campaignName: name });
+    }
+  } catch (_) {
+    // ignore
+  }
+}
+
+async function searchCampaigns(q) {
+  if (!cfg.token) return [];
+  const query = (q || '').trim();
+  const path = `/api/twitter/plugin/campaigns${query ? `?q=${encodeURIComponent(query)}` : ''}`;
+  const data = await api(path);
+  return Array.isArray(data) ? data : [];
+}
+
+function renderCampaignSuggest(items, emptyText) {
+  const list = document.getElementById('campaignSuggest');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!items.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = emptyText || '无匹配活动';
+    list.appendChild(li);
+  } else {
+    for (const item of items) {
+      const li = document.createElement('li');
+      li.dataset.id = item.id || '';
+      li.dataset.name = item.name || '';
+      const title = document.createElement('span');
+      title.textContent = item.name || item.id || '';
+      li.appendChild(title);
+      if (item.brandName && item.brandName !== item.name) {
+        const sub = document.createElement('span');
+        sub.className = 'sub';
+        sub.textContent = item.brandName;
+        li.appendChild(sub);
+      }
+      list.appendChild(li);
+    }
+  }
+  list.classList.remove('hidden');
+}
+
+async function onCampaignNameInput() {
+  const nameEl = document.getElementById('campaignName');
+  if (!nameEl || nameEl.disabled) return;
+  clearTimeout(campaignSearchTimer);
+  campaignSearchTimer = setTimeout(async () => {
+    try {
+      const items = await searchCampaigns(nameEl.value);
+      renderCampaignSuggest(items);
+    } catch (e) {
+      renderCampaignSuggest([], e.message || '搜索失败');
+    }
+  }, 250);
+}
+
+async function selectCampaign(id, name) {
+  if (!id) return;
+  hideCampaignSuggest();
+  await persistCfg({ campaignId: id, campaignName: name || id });
+  updateCampaignPickerUi();
+  showSettingsStatus(`已选择活动：${name || id}`, 'ok');
+}
+
 async function loadCfg() {
   cfg = await chrome.storage.local.get({
-    apiBase: 'http://localhost:8080',
+    apiEnv: '',
+    apiBase: 'http://localhost:8081',
     campaignId: '',
+    campaignName: '',
     businessAccount: '',
+    pluginRole: 'small',
     username: '',
+    password: '',
     token: '',
     displayName: ''
   });
@@ -64,28 +247,63 @@ async function loadCfg() {
       });
     }
   }
-  cfg.apiBase = (cfg.apiBase || '').replace(/\/$/, '');
+  normalizeApiEnvCfg();
+  if (cfg.pluginRole !== 'big') cfg.pluginRole = 'small';
+  if (String(cfg.businessAccount || '').trim().toLowerCase() === 'admin') {
+    cfg.businessAccount = '';
+  }
 }
 
 async function persistCfg(partial) {
   cfg = { ...cfg, ...partial };
+  if (partial && Object.prototype.hasOwnProperty.call(partial, 'apiEnv')) {
+    normalizeApiEnvCfg();
+  } else if (partial && Object.prototype.hasOwnProperty.call(partial, 'apiBase') && !partial.apiEnv) {
+    cfg.apiEnv = inferApiEnv(cfg.apiBase);
+    normalizeApiEnvCfg();
+  } else {
+    normalizeApiEnvCfg();
+  }
+  if (cfg.pluginRole !== 'big') cfg.pluginRole = 'small';
+  if (String(cfg.businessAccount || '').trim().toLowerCase() === 'admin') {
+    cfg.businessAccount = '';
+  }
   await chrome.storage.local.set({
+    apiEnv: cfg.apiEnv || 'test',
     apiBase: cfg.apiBase || '',
     campaignId: cfg.campaignId || '',
+    campaignName: cfg.campaignName || '',
     businessAccount: cfg.businessAccount || '',
+    pluginRole: cfg.pluginRole || 'small',
     username: cfg.username || '',
+    password: cfg.password || '',
     token: cfg.token || '',
     displayName: cfg.displayName || ''
   });
 }
 
-function fillSettingsForm() {
-  document.getElementById('apiBase').value = cfg.apiBase || '';
-  document.getElementById('campaignId').value = cfg.campaignId || '';
+function applyPopupRoleUi() {
+  const roleEl = document.getElementById('pluginRole');
   const bizEl = document.getElementById('businessAccount');
-  if (bizEl) bizEl.value = cfg.businessAccount || '';
+  if (roleEl) roleEl.value = cfg.pluginRole === 'big' ? 'big' : 'small';
+  if (!bizEl) return;
+  if (cfg.pluginRole === 'big') {
+    bizEl.value = BIG_ACCOUNT;
+    bizEl.readOnly = true;
+  } else {
+    bizEl.readOnly = false;
+    bizEl.value = storedSmallBusinessAccount();
+  }
+}
+
+function fillSettingsForm() {
+  applySettingsApiEnvUi();
+  updateCampaignPickerUi();
+  const bizEl = document.getElementById('businessAccount');
+  if (bizEl) bizEl.value = cfg.pluginRole === 'big' ? BIG_ACCOUNT : storedSmallBusinessAccount();
+  applyPopupRoleUi();
   document.getElementById('username').value = cfg.username || '';
-  document.getElementById('password').value = '';
+  document.getElementById('password').value = cfg.password || '';
   if (cfg.token && cfg.username) {
     loginInfo.textContent = `已登录：${cfg.displayName || cfg.username}`;
     loginInfo.classList.remove('hidden');
@@ -102,11 +320,16 @@ function showMain() {
   viewMain.classList.remove('hidden');
 }
 
-function showSettings() {
+async function showSettings() {
   viewMain.classList.add('hidden');
   viewSettings.classList.remove('hidden');
   fillSettingsForm();
   showSettingsStatus('');
+  hideCampaignSuggest();
+  if (cfg.token) {
+    await ensureCampaignNameFromId();
+    updateCampaignPickerUi();
+  }
 }
 
 async function api(path, options = {}) {
@@ -122,31 +345,65 @@ async function api(path, options = {}) {
   const res = await fetch(url, { ...options, headers });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || body.success === false) {
+    const unauthorized = res.status === 401
+      || /token|未登录|unauthorized|认证/i.test(String(body.message || ''));
+    if (unauthorized && !options.skipAuth && !options.skipRelogin) {
+      const ok = await silentRelogin();
+      if (ok) {
+        return api(path, { ...options, skipRelogin: true });
+      }
+    }
     throw new Error(body.message || `HTTP ${res.status}`);
   }
   return body.data;
 }
 
+let silentReloginInFlight = null;
+
+async function silentRelogin() {
+  if (!cfg.username || !cfg.password) return false;
+  if (silentReloginInFlight) return silentReloginInFlight;
+  silentReloginInFlight = (async () => {
+    try {
+      const data = await api('/api/user/login', {
+        method: 'POST',
+        skipAuth: true,
+        skipRelogin: true,
+        body: JSON.stringify({
+          loginType: 'USERNAME_PASSWORD',
+          username: cfg.username,
+          password: cfg.password
+        })
+      });
+      const token = data && data.accessToken;
+      if (!token) return false;
+      await persistCfg({
+        token,
+        displayName: data.nickname || data.username || cfg.username
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      silentReloginInFlight = null;
+    }
+  })();
+  return silentReloginInFlight;
+}
+
 async function loginAndSave() {
-  const apiBase = document.getElementById('apiBase').value.trim().replace(/\/$/, '');
-  const campaignId = document.getElementById('campaignId').value.trim();
-  const businessAccount = document.getElementById('businessAccount')?.value.trim() || '';
+  const apiEnv = readSettingsApiEnv();
+  const apiBase = resolveApiBase(apiEnv);
+  const { pluginRole, businessAccount } = readPopupRole();
   const username = document.getElementById('username').value.trim();
   const password = document.getElementById('password').value;
-  if (!apiBase) {
-    showSettingsStatus('请填写 API Base URL', 'err');
-    return;
-  }
-  if (!campaignId) {
-    showSettingsStatus('请填写 Campaign ID', 'err');
-    return;
-  }
   if (!username || !password) {
     showSettingsStatus('请填写账号和密码', 'err');
     return;
   }
   showSettingsStatus('登录中…');
   try {
+    cfg.apiEnv = apiEnv;
     cfg.apiBase = apiBase;
     const data = await api('/api/user/login', {
       method: 'POST',
@@ -162,16 +419,22 @@ async function loginAndSave() {
       throw new Error('登录成功但未返回 accessToken');
     }
     await persistCfg({
+      apiEnv,
       apiBase,
-      campaignId,
+      pluginRole,
       businessAccount,
       username,
+      password,
       token,
       displayName: (data.nickname || data.username || username)
     });
-    document.getElementById('password').value = '';
     fillSettingsForm();
-    showSettingsStatus('登录成功，Token 已保存', 'ok');
+    await ensureCampaignNameFromId();
+    updateCampaignPickerUi();
+    const tip = cfg.campaignId
+      ? '登录成功，Token 已保存'
+      : '登录成功。请搜索并选择活动名称';
+    showSettingsStatus(tip, 'ok');
   } catch (e) {
     showSettingsStatus(e.message || String(e), 'err');
   }
@@ -179,17 +442,22 @@ async function loginAndSave() {
 
 async function testConnection() {
   await loadCfg();
-  const apiBase = document.getElementById('apiBase').value.trim().replace(/\/$/, '') || cfg.apiBase;
+  const apiEnv = readSettingsApiEnv();
+  const apiBase = resolveApiBase(apiEnv);
   const campaignId = document.getElementById('campaignId').value.trim() || cfg.campaignId;
-  const businessAccount = document.getElementById('businessAccount')?.value.trim() || cfg.businessAccount || '';
-  if (!apiBase || !campaignId) {
-    showSettingsStatus('请先填写 API Base 与 Campaign ID', 'err');
-    return;
-  }
+  const pluginRole = document.getElementById('pluginRole')?.value === 'big' ? 'big' : 'small';
+  const businessAccount = pluginRole === 'big'
+    ? 'admin'
+    : (document.getElementById('businessAccount')?.value.trim() || cfg.businessAccount || '');
   if (!cfg.token) {
-    showSettingsStatus('请先登录并保存', 'err');
+    showSettingsStatus('请先登录 CRM', 'err');
     return;
   }
+  if (!campaignId) {
+    showSettingsStatus('请先选择活动', 'err');
+    return;
+  }
+  cfg.apiEnv = apiEnv;
   cfg.apiBase = apiBase;
   showSettingsStatus('测试中…');
   try {
@@ -199,8 +467,20 @@ async function testConnection() {
       `/api/campaigns/${encodeURIComponent(campaignId)}/twitter-plugin/leads?${q}`
     );
     const n = Array.isArray(data) ? data.length : 0;
-    await persistCfg({ apiBase, campaignId, businessAccount });
-    showSettingsStatus(`连接成功，PENDING_PLUGIN 线索 ${n} 条`, 'ok');
+    await persistCfg({
+      apiEnv,
+      apiBase,
+      campaignId,
+      campaignName: cfg.campaignName || '',
+      pluginRole,
+      businessAccount
+    });
+    showSettingsStatus(
+      pluginRole === 'big'
+        ? `连接成功，PENDING_PLUGIN 线索 ${n} 条（系统数据库请用侧栏）`
+        : `连接成功，PENDING_PLUGIN 线索 ${n} 条`,
+      'ok'
+    );
   } catch (e) {
     showSettingsStatus(e.message || String(e), 'err');
   }
@@ -208,6 +488,7 @@ async function testConnection() {
 
 async function logout() {
   await persistCfg({ token: '', displayName: '' });
+  hideCampaignSuggest();
   fillSettingsForm();
   showSettingsStatus('已退出登录', 'ok');
 }
@@ -343,7 +624,8 @@ async function onAction(act, lead) {
                 text: outText,
                 extractQuote: false,
                 businessAccount: cfg.businessAccount || undefined,
-                pluginCaptureId: `ext-${lead.leadId}-${hashText(outText)}-out`
+                pluginCaptureId: `ext-${lead.leadId}-${hashText(outText)}-out`,
+                source: 'manual'
               })
             }
           );
@@ -356,7 +638,7 @@ async function onAction(act, lead) {
     renderList();
     showBanner(`已回写 ${contactStatus}`, 'ok');
   } catch (e) {
-    showBanner(e.message || String(e), 'err');
+    showBanner(formatExtError(e), 'err');
   }
 }
 
@@ -365,8 +647,16 @@ async function refresh() {
   try {
     await loadCfg();
     if (!cfg.apiBase || !cfg.campaignId || !cfg.token) {
-      showBanner('请先在设置中用账号密码登录', 'err');
-      listEl.innerHTML = '<div class="empty">打开右上角 ⚙，用 CRM 账号登录并填写活动 ID</div>';
+      showBanner('请先在设置中登录并选择活动', 'err');
+      listEl.innerHTML = '<div class="empty">打开右上角 ⚙，登录 CRM 并选择活动名称</div>';
+      return;
+    }
+    if (cfg.pluginRole === 'big') {
+      leads = [];
+      captureLeads = [];
+      templates = [];
+      renderList();
+      showBanner('系统数据库请用侧栏查看已移交线索，popup 不承担移交/系统数据库沟通', 'ok');
       return;
     }
     const [leadData, tplData, allPluginLeads] = await Promise.all([
@@ -406,15 +696,72 @@ async function refresh() {
 document.getElementById('refresh').addEventListener('click', refresh);
 document.getElementById('openSettings').addEventListener('click', async () => {
   await loadCfg();
-  showSettings();
+  await showSettings();
 });
 document.getElementById('backToMain').addEventListener('click', () => {
-  showMain();
-  refresh();
+  const apiEnv = readSettingsApiEnv();
+  const campaignId = document.getElementById('campaignId').value.trim() || cfg.campaignId;
+  const { pluginRole, businessAccount } = readPopupRole();
+  persistCfg({
+    apiEnv,
+    apiBase: resolveApiBase(apiEnv),
+    campaignId,
+    campaignName: cfg.campaignName || '',
+    pluginRole,
+    businessAccount
+  }).then(() => {
+    hideCampaignSuggest();
+    showMain();
+    refresh();
+  });
 });
 document.getElementById('loginSave').addEventListener('click', loginAndSave);
 document.getElementById('testConn').addEventListener('click', testConnection);
 document.getElementById('logout').addEventListener('click', logout);
+document.getElementById('pluginRole')?.addEventListener('change', () => {
+  rememberSmallBusinessAccount(document.getElementById('businessAccount')?.value);
+  cfg.pluginRole = document.getElementById('pluginRole').value === 'big' ? 'big' : 'small';
+  applyPopupRoleUi();
+  persistCfg({ pluginRole: cfg.pluginRole, businessAccount: storedSmallBusinessAccount() });
+});
+
+document.getElementById('apiEnvSeg')?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-api-env]');
+  if (!btn) return;
+  const env = btn.dataset.apiEnv === 'local' ? 'local' : 'test';
+  const prev = cfg.apiEnv === 'local' ? 'local' : 'test';
+  document.querySelectorAll('#apiEnvSeg .seg-btn').forEach((b) => {
+    b.classList.toggle('active', b.dataset.apiEnv === env);
+  });
+  if (env === prev) return;
+  const hadToken = Boolean(cfg.token);
+  await persistCfg({
+    apiEnv: env,
+    apiBase: resolveApiBase(env),
+    token: '',
+    displayName: ''
+  });
+  fillSettingsForm();
+  hideCampaignSuggest();
+  showSettingsStatus(
+    hadToken
+      ? '已切换连接环境，请重新登录（Token 不能跨环境使用）'
+      : `已切换到${env === 'local' ? '本地环境' : '测试服务器'}`,
+    hadToken ? 'err' : 'ok'
+  );
+});
+
+document.getElementById('campaignName')?.addEventListener('input', onCampaignNameInput);
+document.getElementById('campaignName')?.addEventListener('focus', onCampaignNameInput);
+document.getElementById('campaignSuggest')?.addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-id]');
+  if (!li) return;
+  selectCampaign(li.dataset.id, li.dataset.name || li.dataset.id);
+});
+document.addEventListener('click', (e) => {
+  const picker = document.querySelector('.campaign-picker');
+  if (picker && !picker.contains(e.target)) hideCampaignSuggest();
+});
 
 function hashText(s) {
   let h = 0;
@@ -443,7 +790,8 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
           text,
           extractQuote: direction === 'IN',
           businessAccount: cfg.businessAccount || undefined,
-          pluginCaptureId: `ext-${leadId}-${hashText(text)}-${direction.toLowerCase()}`
+          pluginCaptureId: `ext-${leadId}-${hashText(text)}-${direction.toLowerCase()}`,
+          source: 'manual'
         })
       }
     );
@@ -458,9 +806,10 @@ document.getElementById('captureBtn').addEventListener('click', async () => {
 });
 
 (async () => {
+  fillExtVersion();
   await loadCfg();
   if (!cfg.token || !cfg.campaignId) {
-    showSettings();
+    await showSettings();
   } else {
     showMain();
     refresh();

@@ -15,36 +15,52 @@
       <button type="button" id="openSettings" class="linkish" title="设置">⚙</button>
     </header>
 
-    <section class="toolbar">
-      <select id="templateSelect" title="话术模板"></select>
-      <button type="button" id="refresh" class="primary">刷新</button>
+    <section class="template-panel">
+      <div class="toolbar">
+        <select id="templateSelect" title="话术模板"></select>
+        <button type="button" id="refresh" class="primary">刷新</button>
+      </div>
+      <div class="template-mode-row">
+        <button type="button" id="templateViewBtn" class="ghost">查看</button>
+        <button type="button" id="templateEditBtn" class="ghost">编辑</button>
+        <button type="button" id="templateCollapseBtn" class="ghost hidden">收起</button>
+      </div>
+      <div id="templateBodyWrap" class="template-body hidden">
+        <pre id="templatePreview" class="template-preview"></pre>
+        <textarea id="templateEditor" class="hidden" rows="5" placeholder="编辑话术，发送前须先保存"></textarea>
+        <div id="templateSaveRow" class="template-actions hidden">
+          <button type="button" id="templateSaveBtn" class="primary" disabled>保存</button>
+          <button type="button" id="templateCancelBtn" class="ghost">取消</button>
+          <span id="templateDirtyHint" class="template-dirty hidden">未保存</span>
+        </div>
+      </div>
     </section>
 
     <section class="mode-bar" id="modeBar">
-      <div class="mode-row">
-        <span class="mode-label">工作模式</span>
-        <div class="seg" id="workModeSeg" role="group" aria-label="工作模式">
-          <button type="button" class="seg-btn" data-work-mode="small">小号建联</button>
-          <button type="button" class="seg-btn" data-work-mode="big">大号沟通</button>
-        </div>
-      </div>
       <div id="modeHint" class="mode-hint">当前：小号</div>
       <div id="smallQueueRow" class="mode-row">
-        <span class="mode-label">队列</span>
-        <div class="seg" id="smallQueueSeg" role="group" aria-label="小号队列">
-          <button type="button" class="seg-btn" data-small-queue="pending">待建联</button>
-          <button type="button" class="seg-btn" data-small-queue="handoff">已私信待移交</button>
-        </div>
+        <span class="mode-label">状态</span>
+        <select id="smallStatusFilter" title="小号线索状态筛选">
+          <option value="pending">符合-待建联</option>
+          <option value="contacted">已私信</option>
+          <option value="replied">已回复</option>
+          <option value="skipped">跳过</option>
+          <option value="failed">失败</option>
+          <option value="all">全部</option>
+        </select>
       </div>
       <div id="bigStatusRow" class="mode-row hidden">
         <span class="mode-label">状态</span>
-        <select id="bigStatusFilter" title="大号线索状态筛选">
+        <select id="bigStatusFilter" title="系统数据库线索状态筛选">
           <option value="PLUGIN_CONTACTED">PLUGIN_CONTACTED</option>
           <option value="REPLIED">REPLIED</option>
-          <option value="PENDING_PLUGIN">PENDING_PLUGIN</option>
           <option value="ALL">全部</option>
         </select>
       </div>
+    </section>
+
+    <section class="lead-search" id="leadSearchSection">
+      <input id="leadSearchInput" type="search" placeholder="昵称 / @账号 / 主页链接" autocomplete="off" />
     </section>
 
     <section class="bulk-send" id="bulkSendSection">
@@ -89,30 +105,44 @@
       <button type="button" id="captureBtn" class="ghost block">单条收录（IN 自动抽报价）</button>
     </section>
 
-    <footer>侧栏常驻 · 发送需本机已登录 X · 移交/大号请用本侧栏</footer>
+    <footer>侧栏常驻 · 发送需本机已登录 X · 移交/系统数据库请用本侧栏 · <span data-ext-version></span></footer>
   </div>
 
   <div id="viewSettings" class="hidden">
     <header class="settings-header">
       <button type="button" id="backToMain" class="back-btn" title="返回">← 返回</button>
-      <div class="brand">设置</div>
+      <div class="brand">设置 <span data-ext-version></span></div>
       <span class="spacer"></span>
     </header>
 
     <section class="settings-body">
-      <p class="hint">CRM 账号登录后自动保存 Token。X 聊天解锁码仅本机使用，默认 1234。</p>
+      <p class="hint">登录 CRM 后自动保存 Token。选测试服务器连线上 CRM，选本地连本机。活动名与 CRM 列表一致，输入关键字即可筛选。</p>
 
-      <label for="apiBase">API Base URL</label>
-      <input id="apiBase" type="url" placeholder="http://localhost:8080" autocomplete="off" />
+      <label>连接环境</label>
+      <div class="seg" id="apiEnvSeg" role="group" aria-label="连接环境">
+        <button type="button" class="seg-btn active" data-api-env="test">测试服务器</button>
+        <button type="button" class="seg-btn" data-api-env="local">本地环境</button>
+      </div>
+      <p class="hint">切换环境后需重新登录（Token 不能跨环境使用）。</p>
 
-      <label for="campaignId">Campaign ID（活动 ID）</label>
-      <input id="campaignId" type="text" placeholder="活动 ID" autocomplete="off" />
+      <label for="campaignName">活动名称</label>
+      <div class="campaign-picker">
+        <input id="campaignName" type="text" placeholder="登录后输入关键字搜索活动" autocomplete="off" disabled />
+        <ul id="campaignSuggest" class="campaign-suggest hidden" role="listbox"></ul>
+      </div>
+      <p id="campaignSelectedHint" class="hint">登录后可搜索并选择活动。</p>
+      <input id="campaignId" type="hidden" value="" />
 
-      <label for="businessAccount">当前商务号标识</label>
-      <input id="businessAccount" type="text" placeholder="如 biz_small / biz_big" autocomplete="off" />
+      <label>插件角色</label>
+      <div class="seg" id="pluginRoleSeg" role="group" aria-label="插件角色">
+        <button type="button" class="seg-btn" data-plugin-role="small">小号</button>
+        <button type="button" class="seg-btn" data-plugin-role="big">系统数据库</button>
+      </div>
+      <p id="roleHint" class="hint">小号负责建联与转交；系统数据库只看已移交线索。转交目标固定为 admin。</p>
 
-      <label for="handoffTarget">转交目标商务号（大号）</label>
-      <input id="handoffTarget" type="text" placeholder="转交时使用，如 biz_big" autocomplete="off" />
+      <label for="businessAccount">个人ID</label>
+      <input id="businessAccount" type="text" placeholder="如 small-xihahu" autocomplete="off" />
+      <p id="bizHint" class="hint">小号请填写当前个人ID；系统数据库身份固定为 admin。</p>
 
       <label for="username">账号（用户名）</label>
       <input id="username" type="text" placeholder="CRM 登录用户名" autocomplete="username" />
