@@ -12,6 +12,7 @@ const {
   crmOpsReviewDriver,
   crmOrderReviewDriver,
   crmOpsReviewPlugin,
+  CrmListFoldError,
   hideThreadFromHost,
   registerCrmDrivers,
 } = require("../dist");
@@ -270,6 +271,17 @@ describe("CRM drivers and plugins", () => {
     const pref = await store.getConversationPref("local-owner", "crm:ops_task:task-2");
     assert.equal(pref?.hidden, true);
     assert.equal(pref?.hidden_reason, "policy");
+    await host.dispose();
+  });
+
+  it("refuses to pretend a fold succeeded when the host has no authority", async () => {
+    const host = await createHost();
+    const hide = hideThreadFromHost(host, "local-owner", () => "2026-08-26T00:00:00.000Z");
+    await assert.rejects(
+      () => hide("crm:ops_task:task-2"),
+      (error) =>
+        error instanceof CrmListFoldError && /no conversation pref store/.test(error.message),
+    );
     await host.dispose();
   });
 });

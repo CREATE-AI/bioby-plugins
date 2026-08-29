@@ -3,6 +3,7 @@ const { describe, it } = require("node:test");
 const { conversationId, verifyPollConnectorConformance } = require("@regenic/domain");
 const {
   CrmClient,
+  CrmListFoldError,
   CrmOpsPollConnector,
   formatSeenCursor,
 } = require("../dist");
@@ -89,6 +90,51 @@ describe("CrmOpsPollConnector", () => {
     );
     assert.deepEqual(hidden, ["crm:ops_task:task-2"]);
     assert.equal(result.next_cursor.includes("task-2"), false);
+  });
+
+  it("fails the poll when a gone task cannot be folded", async () => {
+    const first = createConnector({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [sampleOpsTask()],
+      }),
+    });
+    const created = await first.connector.poll(null);
+    const { connector } = createConnector({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, { items: [] }),
+      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(404),
+    });
+    await assert.rejects(
+      () => connector.poll({ value: created.next_cursor }),
+      (error) => error instanceof CrmListFoldError && /hideThread is required/.test(error.message),
+    );
+  });
+
+  it("keeps a gone task in seen when fold write fails transiently", async () => {
+    const first = createConnector({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [sampleOpsTask(), sampleOpsTask({ id: "task-2" })],
+      }),
+    });
+    const created = await first.connector.poll(null);
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+          items: [sampleOpsTask({ nextAction: "STILL_NEED_REVIEW" })],
+        }),
+        "GET /internal/regenic/ops-tasks/task-2": jsonResponse(404),
+      },
+      {
+        hideThread: async () => {
+          throw new Error("pref write failed");
+        },
+      },
+    );
+    const result = await connector.poll({ value: created.next_cursor });
+    const operations = Object.fromEntries(
+      result.batch.records.map((record) => [record.external_id, record.operation]),
+    );
+    assert.equal(operations["ops_task:task-1:task"], "revise");
+    assert.match(result.next_cursor, /"task-2"/);
   });
 
   it("revises seen pending tasks even when they miss the max_open window", async () => {

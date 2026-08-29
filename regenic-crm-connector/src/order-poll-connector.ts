@@ -6,7 +6,7 @@ import {
   type CrmOrder,
   isPendingHumanOrder,
 } from "./crm-client";
-import type { HideThread } from "./list-fold";
+import { foldGoneIds, type HideThread } from "./list-fold";
 import { CRM_SOURCE, crmScopeOf, orderThreadId } from "./locators";
 import { orderRecord } from "./records";
 import {
@@ -48,7 +48,7 @@ export class CrmOrderPollConnector {
     const listed = await this.client.listPendingHumanOrders();
     const { live, maybeGone } = selectOpenWindow(listed, seen, this.maxOpen);
     const disappeared = await this.confirmGone(maybeGone);
-    await this.hideGone(disappeared);
+    const folded = await foldGoneIds(disappeared, this.options.hideThread, orderThreadId);
     const reconciled = reconcileRecords({
       seen,
       live: live.map((order) => {
@@ -60,7 +60,7 @@ export class CrmOrderPollConnector {
           revise: () => orderRecord(order, "revise", revision),
         };
       }),
-      disappeared: disappeared.map((id) => ({ id })),
+      disappeared: folded.map((id) => ({ id })),
     });
     const nextCursor = formatSeenCursor(scope, reconciled.nextSeen);
     return toPollResult({
@@ -90,15 +90,5 @@ export class CrmOrderPollConnector {
       }
     }
     return gone;
-  }
-
-  private async hideGone(ids: string[]): Promise<void> {
-    const hide = this.options.hideThread;
-    if (!hide) {
-      return;
-    }
-    for (const id of ids) {
-      await hide(orderThreadId(id));
-    }
   }
 }

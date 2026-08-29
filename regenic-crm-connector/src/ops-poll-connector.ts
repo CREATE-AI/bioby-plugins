@@ -6,7 +6,7 @@ import {
   type CrmOpsTask,
   isEmailSubmitPending,
 } from "./crm-client";
-import type { HideThread } from "./list-fold";
+import { foldGoneIds, type HideThread } from "./list-fold";
 import { CRM_SOURCE, crmScopeOf, opsTaskThreadId } from "./locators";
 import { opsTaskRecord } from "./records";
 import {
@@ -59,7 +59,7 @@ export class CrmOpsPollConnector {
     }
     const { live, maybeGone } = selectOpenWindow(listed, seen, this.maxOpen);
     const disappeared = await this.confirmGone(maybeGone);
-    await this.hideGone(disappeared);
+    const folded = await foldGoneIds(disappeared, this.options.hideThread, opsTaskThreadId);
     const reconciled = reconcileRecords({
       seen,
       live: live.map((task) => {
@@ -71,7 +71,7 @@ export class CrmOpsPollConnector {
           revise: () => opsTaskRecord(task, "revise", revision),
         };
       }),
-      disappeared: disappeared.map((id) => ({ id })),
+      disappeared: folded.map((id) => ({ id })),
     });
     const nextCursor = formatSeenCursor(scope, reconciled.nextSeen);
     return toPollResult({
@@ -101,15 +101,5 @@ export class CrmOpsPollConnector {
       }
     }
     return gone;
-  }
-
-  private async hideGone(ids: string[]): Promise<void> {
-    const hide = this.options.hideThread;
-    if (!hide) {
-      return;
-    }
-    for (const id of ids) {
-      await hide(opsTaskThreadId(id));
-    }
   }
 }
