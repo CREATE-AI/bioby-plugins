@@ -2,6 +2,8 @@ import { channelRecord, type IngestRecord } from "@regenic/domain";
 import type { CrmOpsTask, CrmOrder } from "./crm-client";
 import {
   CRM_SOURCE,
+  ORDER_UNIT_KIND,
+  OPS_UNIT_KIND,
   orderExternalId,
   orderThreadId,
   opsTaskExternalId,
@@ -11,7 +13,7 @@ import { withOperation } from "./reconcile";
 
 export function opsTaskRecord(
   task: CrmOpsTask,
-  operation: "create" | "revise" | "tombstone",
+  operation: "create" | "revise",
   revisionId?: string,
 ): IngestRecord {
   const label = opsConversationLabel(task);
@@ -26,6 +28,7 @@ export function opsTaskRecord(
     scope_id: task.id,
     scope_name: label,
     conversation_kind: "ops_task",
+    unit_kind: OPS_UNIT_KIND,
     thread_facet: "ticket",
     type: "task",
     thread_id: opsTaskThreadId(task.id),
@@ -44,7 +47,7 @@ export function opsTaskRecord(
 
 export function orderRecord(
   order: CrmOrder,
-  operation: "create" | "revise" | "tombstone",
+  operation: "create" | "revise",
   revisionId?: string,
 ): IngestRecord {
   const label = orderConversationLabel(order);
@@ -59,6 +62,7 @@ export function orderRecord(
     scope_id: order.id,
     scope_name: label,
     conversation_kind: "order",
+    unit_kind: ORDER_UNIT_KIND,
     thread_facet: "ticket",
     type: "task",
     thread_id: orderThreadId(order.id),

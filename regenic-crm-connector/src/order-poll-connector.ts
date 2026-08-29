@@ -6,7 +6,8 @@ import {
   type CrmOrder,
   isPendingHumanOrder,
 } from "./crm-client";
-import { CRM_SOURCE, crmScopeOf } from "./locators";
+import { foldGoneIds, type HideThread } from "./list-fold";
+import { CRM_SOURCE, crmScopeOf, orderThreadId } from "./locators";
 import { orderRecord } from "./records";
 import {
   formatSeenCursor,
@@ -22,6 +23,7 @@ export interface CrmOrderPollConnectorOptions {
   org_id: string;
   max_open_order_reviews?: number;
   now?: () => string;
+  hideThread?: HideThread;
 }
 
 export class CrmOrderPollConnector {
@@ -46,6 +48,7 @@ export class CrmOrderPollConnector {
     const listed = await this.client.listPendingHumanOrders();
     const { live, maybeGone } = selectOpenWindow(listed, seen, this.maxOpen);
     const disappeared = await this.confirmGone(maybeGone);
+    const folded = await foldGoneIds(disappeared, this.options.hideThread, orderThreadId);
     const reconciled = reconcileRecords({
       seen,
       live: live.map((order) => {
@@ -57,11 +60,7 @@ export class CrmOrderPollConnector {
           revise: () => orderRecord(order, "revise", revision),
         };
       }),
-      disappeared: disappeared.map((id) => ({
-        id,
-        tombstone: () =>
-          orderRecord(tombstoneOrder(id, this.now()), "tombstone", seen[id]),
-      })),
+      disappeared: folded.map((id) => ({ id })),
     });
     const nextCursor = formatSeenCursor(scope, reconciled.nextSeen);
     return toPollResult({
@@ -92,12 +91,4 @@ export class CrmOrderPollConnector {
     }
     return gone;
   }
-}
-
-function tombstoneOrder(id: string, updatedAt: string): CrmOrder {
-  return {
-    id,
-    internalReviewStatus: "CLOSED",
-    updatedAt,
-  };
 }

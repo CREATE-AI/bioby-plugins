@@ -4,7 +4,7 @@ const {
   CrmClient,
   CrmOrderPollConnector,
 } = require("../dist");
-const { createFetch, jsonResponse, sampleOrder } = require("./helpers.cjs");
+const { createFetch, jsonResponse, sampleOrder, surfaceOf } = require("./helpers.cjs");
 
 describe("CrmOrderPollConnector", () => {
   it("ingests a pending-human order as its own task thread", async () => {
@@ -23,6 +23,7 @@ describe("CrmOrderPollConnector", () => {
     );
     const result = await connector.poll(null);
     assert.equal(result.batch.records[0].type, "task");
+    assert.equal(surfaceOf(result.batch.records[0]).unit_kind, "crm.order_review");
     assert.equal(result.batch.records[0].thread.id, "crm:order:pf-1");
     const body = result.batch.records[0].content.find((part) => part.role === "body").text;
     assert.match(body, /订单 AI 内审待人工/);

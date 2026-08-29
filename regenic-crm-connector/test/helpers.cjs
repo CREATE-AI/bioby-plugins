@@ -106,9 +106,17 @@ function sampleOrder(overrides = {}) {
   };
 }
 
+function surfaceOf(record) {
+  const part = (record.content ?? []).find(
+    (item) => item.role === "metadata" && item.media_type === "application/vnd.regenic.surface+json",
+  );
+  return part ? JSON.parse(part.text) : {};
+}
+
 module.exports = {
   jsonResponse,
   createFetch,
   sampleOpsTask,
   sampleOrder,
+  surfaceOf,
 };

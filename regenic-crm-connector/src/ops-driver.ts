@@ -24,10 +24,12 @@ import {
   requireCrmBaseUrl,
   type CrmFetch,
 } from "./crm-client";
+import { hideThreadFromHost } from "./list-fold";
 import {
   CRM_CHANNEL_LABEL,
   CRM_SOURCE,
   crmScopeOf,
+  crmSubjectCatalog,
   isOpsTaskTarget,
   OPS_CONNECTOR_TYPE,
   opsStreamKey,
@@ -85,6 +87,10 @@ export const crmOpsReviewDriver: ChannelDriver = {
 
   async resolveThreadStream(installation, _thread, host, env) {
     return mountOpsStream(host, installation, env);
+  },
+
+  subjectCatalog() {
+    return crmSubjectCatalog();
   },
 
   installCatalog() {
@@ -216,6 +222,7 @@ export async function mountOpsStream(
   const scope = crmScopeOf(crmHasToken(env, installation.credentials_ref));
   const streamKey = opsStreamKey(scope);
   if (!host.get("connectors").getStream(installation.id, streamKey)) {
+    const now = extras.now ?? (() => new Date().toISOString());
     await host.plugin(crmOpsReviewPlugin, {
       installation_id: installation.id,
       org_id: installation.org_id,
@@ -225,6 +232,7 @@ export async function mountOpsStream(
       env,
       fetch: extras.fetch,
       now: extras.now,
+      hideThread: hideThreadFromHost(host, installation.org_id, now),
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);

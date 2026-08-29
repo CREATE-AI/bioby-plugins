@@ -1,5 +1,13 @@
+import type { SubjectCatalog } from "@regenic/domain";
+
 export const CRM_SOURCE = "crm";
 export const CRM_CHANNEL_LABEL = "CRM";
+
+/** Opaque work-unit ids. Kernel equality-matches only. Convention: `{source}.{native}`. */
+export const OPS_UNIT_KIND = "crm.ops_review";
+export const ORDER_UNIT_KIND = "crm.order_review";
+export const OPS_UNIT_KIND_LABEL = "邮件提报待审";
+export const ORDER_UNIT_KIND_LABEL = "订单 AI 内审";
 
 export const OPS_TARGET_PREFIX = "ops_task:";
 export const ORDER_TARGET_PREFIX = "order:";
@@ -108,6 +116,15 @@ export function parseOrderReviewResult(value: string): OrderReviewResult | undef
     return "REJECTED";
   }
   return undefined;
+}
+
+export function crmSubjectCatalog(): SubjectCatalog {
+  return {
+    kinds: [
+      { id: OPS_UNIT_KIND, label: OPS_UNIT_KIND_LABEL },
+      { id: ORDER_UNIT_KIND, label: ORDER_UNIT_KIND_LABEL },
+    ],
+  };
 }
 
 export function writeBackLabels(label: string): string[] {

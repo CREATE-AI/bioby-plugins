@@ -3,6 +3,7 @@ import { crmOpsReviewDriver } from "./ops-driver";
 import { crmOrderReviewDriver } from "./order-driver";
 
 export * from "./locators";
+export * from "./list-fold";
 export * from "./crm-client";
 export * from "./reconcile";
 export * from "./records";

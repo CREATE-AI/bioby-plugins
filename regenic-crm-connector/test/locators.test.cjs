@@ -3,6 +3,9 @@ const { describe, it } = require("node:test");
 const { conversationId } = require("@regenic/domain");
 const {
   CRM_SOURCE,
+  OPS_UNIT_KIND,
+  ORDER_UNIT_KIND,
+  crmSubjectCatalog,
   opsTaskExternalId,
   opsTaskThreadId,
   orderExternalId,
@@ -63,5 +66,16 @@ describe("CRM locators", () => {
       "APPROVE_AND_CONTINUE",
       "继续自动化",
     ]);
+  });
+
+  it("publishes a shared subject catalog for both CRM queues", () => {
+    assert.equal(OPS_UNIT_KIND, "crm.ops_review");
+    assert.equal(ORDER_UNIT_KIND, "crm.order_review");
+    assert.deepEqual(crmSubjectCatalog(), {
+      kinds: [
+        { id: "crm.ops_review", label: "邮件提报待审" },
+        { id: "crm.order_review", label: "订单 AI 内审" },
+      ],
+    });
   });
 });
