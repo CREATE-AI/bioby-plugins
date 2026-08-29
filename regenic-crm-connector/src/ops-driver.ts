@@ -4,11 +4,11 @@ import {
   envCredentialsRef,
   requireConnectorStream,
   type ChannelDriver,
+  type ConnectorHost,
   type ConnectorInstallation,
   type JsonValue,
   type NewConnectorInstallation,
 } from "@regenic/domain";
-import type { Host } from "@regenic/plugin-host";
 import {
   CRM_TOKEN_ENV,
   configNumber,
@@ -24,7 +24,6 @@ import {
   requireCrmBaseUrl,
   type CrmFetch,
 } from "./crm-client";
-import { hideThreadFromHost } from "./list-fold";
 import {
   CRM_CHANNEL_LABEL,
   CRM_SOURCE,
@@ -214,7 +213,7 @@ export function opsInstallConfig(
 }
 
 export async function mountOpsStream(
-  host: Host,
+  host: ConnectorHost,
   installation: ConnectorInstallation,
   env: NodeJS.ProcessEnv,
   extras: { fetch?: CrmFetch; now?: () => string } = {},
@@ -222,7 +221,6 @@ export async function mountOpsStream(
   const scope = crmScopeOf(crmHasToken(env, installation.credentials_ref));
   const streamKey = opsStreamKey(scope);
   if (!host.get("connectors").getStream(installation.id, streamKey)) {
-    const now = extras.now ?? (() => new Date().toISOString());
     await host.plugin(crmOpsReviewPlugin, {
       installation_id: installation.id,
       org_id: installation.org_id,
@@ -232,7 +230,6 @@ export async function mountOpsStream(
       env,
       fetch: extras.fetch,
       now: extras.now,
-      hideThread: hideThreadFromHost(host, installation.org_id, now),
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);

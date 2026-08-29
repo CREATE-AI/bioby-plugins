@@ -37,7 +37,9 @@ export function hideThreadFromHost(
 }
 
 /**
- * Fold confirmed-gone ids. Only ids that actually folded may leave `seen`.
+ * Fold confirmed-gone ids. Only successfully folded ids may leave `seen`
+ * when a hide hook is wired. ConnectorHost has no `authority`, so production
+ * poll omits hide and drops membership; the kernel folds on job done.
  * Setup errors fail the poll; a single transient write keeps that id for retry.
  */
 export async function foldGoneIds(
@@ -49,9 +51,7 @@ export async function foldGoneIds(
     return [];
   }
   if (!hide) {
-    throw new CrmListFoldError(
-      "hideThread is required to fold conversations that left the pending queue",
-    );
+    return ids;
   }
   const folded: string[] = [];
   for (const id of ids) {
