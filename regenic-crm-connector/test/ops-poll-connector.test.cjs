@@ -6,7 +6,7 @@ const {
   CrmOpsPollConnector,
   formatSeenCursor,
 } = require("../dist");
-const { createFetch, jsonResponse, sampleOpsTask } = require("./helpers.cjs");
+const { createFetch, jsonResponse, sampleOpsTask, surfaceOf } = require("./helpers.cjs");
 
 function createConnector(routes, extras = {}) {
   const fetch = createFetch(routes);
@@ -21,6 +21,7 @@ function createConnector(routes, extras = {}) {
       org_id: "local-owner",
       max_open_tasks: extras.max_open_tasks ?? 50,
       now: () => "2026-08-26T00:00:00.000Z",
+      hideThread: extras.hideThread,
     },
   );
   return { connector, fetch };
@@ -37,6 +38,7 @@ describe("CrmOpsPollConnector", () => {
     assert.equal(result.batch.records.length, 1);
     assert.equal(result.batch.records[0].operation, "create");
     assert.equal(result.batch.records[0].type, "task");
+    assert.equal(surfaceOf(result.batch.records[0]).unit_kind, "crm.ops_review");
     assert.equal(result.batch.records[0].thread.id, "crm:ops_task:task-1");
     assert.equal(
       conversationId("crm", result.batch.records[0].external_id),
@@ -53,26 +55,40 @@ describe("CrmOpsPollConnector", () => {
     );
   });
 
-  it("revises a changed task and tombstones one confirmed gone", async () => {
+  it("revises a changed task and hides one confirmed gone without tombstone", async () => {
+    const hidden = [];
     const first = createConnector({
       "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
         items: [sampleOpsTask(), sampleOpsTask({ id: "task-2" })],
       }),
     });
     const created = await first.connector.poll(null);
-    const cursor = { value: created.next_cursor };
-    const second = createConnector({
-      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
-        items: [sampleOpsTask({ nextAction: "STILL_NEED_REVIEW" })],
-      }),
-      "GET /internal/regenic/ops-tasks/task-2": jsonResponse(404),
-    });
-    const result = await second.connector.poll(cursor);
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+          items: [sampleOpsTask({ nextAction: "STILL_NEED_REVIEW" })],
+        }),
+        "GET /internal/regenic/ops-tasks/task-2": jsonResponse(404),
+      },
+      {
+        hideThread: async (threadId) => {
+          hidden.push(threadId);
+        },
+      },
+    );
+    const result = await connector.poll({ value: created.next_cursor });
     const operations = Object.fromEntries(
       result.batch.records.map((record) => [record.external_id, record.operation]),
     );
     assert.equal(operations["ops_task:task-1:task"], "revise");
-    assert.equal(operations["ops_task:task-2:task"], "tombstone");
+    assert.equal(surfaceOf(result.batch.records[0]).unit_kind, "crm.ops_review");
+    assert.equal(operations["ops_task:task-2:task"], undefined);
+    assert.equal(
+      result.batch.records.some((record) => record.operation === "tombstone"),
+      false,
+    );
+    assert.deepEqual(hidden, ["crm:ops_task:task-2"]);
+    assert.equal(result.next_cursor.includes("task-2"), false);
   });
 
   it("revises seen pending tasks even when they miss the max_open window", async () => {

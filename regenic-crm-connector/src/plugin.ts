@@ -5,6 +5,7 @@ import {
   crmHasToken,
   type CrmFetch,
 } from "./crm-client";
+import type { HideThread } from "./list-fold";
 import { CRM_SOURCE, crmScopeOf, orderStreamKey, opsStreamKey } from "./locators";
 import { CrmOrderPollConnector } from "./order-poll-connector";
 import { CRM_STREAM_PACE, CrmOpsPollConnector } from "./ops-poll-connector";
@@ -18,6 +19,7 @@ export interface CrmOpsReviewPluginConfig {
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
   now?: () => string;
+  hideThread?: HideThread;
 }
 
 export interface CrmOrderReviewPluginConfig {
@@ -29,6 +31,7 @@ export interface CrmOrderReviewPluginConfig {
   env?: NodeJS.ProcessEnv;
   fetch?: CrmFetch;
   now?: () => string;
+  hideThread?: HideThread;
 }
 
 export const crmOpsReviewPlugin = definePlugin<CrmOpsReviewPluginConfig>({
@@ -48,6 +51,7 @@ export const crmOpsReviewPlugin = definePlugin<CrmOpsReviewPluginConfig>({
         org_id: config.org_id,
         max_open_tasks: config.max_open_tasks,
         now: config.now,
+        hideThread: config.hideThread,
       },
     );
     const scope = crmScopeOf(crmHasToken(env, config.credentials_ref));
@@ -79,6 +83,7 @@ export const crmOrderReviewPlugin = definePlugin<CrmOrderReviewPluginConfig>({
         org_id: config.org_id,
         max_open_order_reviews: config.max_open_order_reviews,
         now: config.now,
+        hideThread: config.hideThread,
       },
     );
     const scope = crmScopeOf(crmHasToken(env, config.credentials_ref));

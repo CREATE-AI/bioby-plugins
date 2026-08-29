@@ -94,7 +94,8 @@ export function selectOpenWindow<T extends { id: string }>(
 export function reconcileRecords(input: {
   seen: Record<string, string>;
   live: LiveReconcileItem[];
-  disappeared: Array<{ id: string; tombstone(): IngestRecord }>;
+  /** Confirmed off the pending queue. Fold via `hidden`, do not tombstone. */
+  disappeared: Array<{ id: string }>;
 }): { records: IngestRecord[]; nextSeen: Record<string, string> } {
   const records: IngestRecord[] = [];
   const gone = new Set(input.disappeared.map((item) => item.id));
@@ -108,10 +109,6 @@ export function reconcileRecords(input: {
       records.push(item.revise());
     }
     nextSeen[item.id] = item.revision;
-  }
-
-  for (const item of input.disappeared) {
-    records.push(item.tombstone());
   }
 
   for (const [id, revision] of Object.entries(input.seen)) {

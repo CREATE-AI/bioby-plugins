@@ -3,6 +3,7 @@ const { describe, it } = require("node:test");
 const {
   ChannelDriverError,
   ChannelDriverRegistry,
+  MemoryAuthorityStore,
   MemoryConnectorRegistry,
   verifyChannelDriverConformance,
 } = require("@regenic/domain");
@@ -11,6 +12,7 @@ const {
   crmOpsReviewDriver,
   crmOrderReviewDriver,
   crmOpsReviewPlugin,
+  hideThreadFromHost,
   registerCrmDrivers,
 } = require("../dist");
 const { createFetch, jsonResponse, sampleOpsTask } = require("./helpers.cjs");
@@ -53,6 +55,16 @@ describe("CRM drivers and plugins", () => {
     });
     assert.equal(crmOpsReviewDriver.connector_protocol, "1.0");
     assert.equal(crmOrderReviewDriver.connector_protocol, "1.0");
+    assert.deepEqual(crmOpsReviewDriver.subjectCatalog(), {
+      kinds: [
+        { id: "crm.ops_review", label: "邮件提报待审" },
+        { id: "crm.order_review", label: "订单 AI 内审" },
+      ],
+    });
+    assert.deepEqual(
+      crmOrderReviewDriver.subjectCatalog(),
+      crmOpsReviewDriver.subjectCatalog(),
+    );
     assert.equal(crmOpsReviewDriver.createThread, undefined);
     assert.equal(crmOpsReviewDriver.bindEgress, undefined);
     assert.equal(crmOpsReviewDriver.outboundId, undefined);
@@ -240,5 +252,24 @@ describe("CRM drivers and plugins", () => {
         error instanceof ChannelDriverError &&
         error.message.includes("including /api"),
     );
+  });
+
+  it("folds a gone thread with conversation_prefs.hidden, not tombstone", async () => {
+    const store = new MemoryAuthorityStore();
+    const host = await createHost();
+    await host.plugin(
+      definePlugin({
+        name: "authority",
+        apply(ctx) {
+          ctx.provide("authority", store);
+        },
+      }),
+    );
+    const hide = hideThreadFromHost(host, "local-owner", () => "2026-08-26T00:00:00.000Z");
+    await hide("crm:ops_task:task-2");
+    const pref = await store.getConversationPref("local-owner", "crm:ops_task:task-2");
+    assert.equal(pref?.hidden, true);
+    assert.equal(pref?.hidden_reason, "policy");
+    await host.dispose();
   });
 });

@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { formatOrderBody } = require("../dist/records");
-const { sampleOrder } = require("./helpers.cjs");
+const { formatOrderBody, opsTaskRecord, orderRecord } = require("../dist/records");
+const { sampleOpsTask, sampleOrder, surfaceOf } = require("./helpers.cjs");
 
 describe("formatOrderBody", () => {
   it("assembles AI review context into the ticket body", () => {
@@ -21,5 +21,15 @@ describe("formatOrderBody", () => {
     assert.match(body, /### agentResponse/);
     assert.match(body, /需要人工确认/);
     assert.doesNotMatch(body, /locator:|projectFieldId:|internalReviewStatus:/);
+  });
+
+  it("stamps the same unit_kind on create and revise for one task instance", () => {
+    const task = sampleOpsTask();
+    const created = opsTaskRecord(task, "create", "r1");
+    const revised = opsTaskRecord({ ...task, nextAction: "STILL_NEED_REVIEW" }, "revise", "r2");
+    assert.equal(surfaceOf(created).unit_kind, "crm.ops_review");
+    assert.equal(surfaceOf(revised).unit_kind, "crm.ops_review");
+    assert.equal(surfaceOf(orderRecord(sampleOrder(), "create", "r1")).unit_kind, "crm.order_review");
+    assert.equal(surfaceOf(orderRecord(sampleOrder(), "revise", "r2")).unit_kind, "crm.order_review");
   });
 });

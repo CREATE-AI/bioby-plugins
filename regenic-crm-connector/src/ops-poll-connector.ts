@@ -6,7 +6,8 @@ import {
   type CrmOpsTask,
   isEmailSubmitPending,
 } from "./crm-client";
-import { CRM_SOURCE, crmScopeOf } from "./locators";
+import type { HideThread } from "./list-fold";
+import { CRM_SOURCE, crmScopeOf, opsTaskThreadId } from "./locators";
 import { opsTaskRecord } from "./records";
 import {
   CRM_STREAM_PACE,
@@ -25,6 +26,7 @@ export interface CrmOpsPollConnectorOptions {
   org_id: string;
   max_open_tasks?: number;
   now?: () => string;
+  hideThread?: HideThread;
 }
 
 export class CrmOpsPollConnector {
@@ -57,6 +59,7 @@ export class CrmOpsPollConnector {
     }
     const { live, maybeGone } = selectOpenWindow(listed, seen, this.maxOpen);
     const disappeared = await this.confirmGone(maybeGone);
+    await this.hideGone(disappeared);
     const reconciled = reconcileRecords({
       seen,
       live: live.map((task) => {
@@ -68,11 +71,7 @@ export class CrmOpsPollConnector {
           revise: () => opsTaskRecord(task, "revise", revision),
         };
       }),
-      disappeared: disappeared.map((id) => ({
-        id,
-        tombstone: () =>
-          opsTaskRecord(tombstoneTask(id, this.now()), "tombstone", seen[id]),
-      })),
+      disappeared: disappeared.map((id) => ({ id })),
     });
     const nextCursor = formatSeenCursor(scope, reconciled.nextSeen);
     return toPollResult({
@@ -103,14 +102,14 @@ export class CrmOpsPollConnector {
     }
     return gone;
   }
-}
 
-function tombstoneTask(id: string, updatedAt: string): CrmOpsTask {
-  return {
-    id,
-    status: "CLOSED",
-    taskType: "EMAIL_SUBMIT_AUTOMATION",
-    updatedAt,
-    reviewGuide: { allowedActions: ["CLOSE_TASK"] },
-  };
+  private async hideGone(ids: string[]): Promise<void> {
+    const hide = this.options.hideThread;
+    if (!hide) {
+      return;
+    }
+    for (const id of ids) {
+      await hide(opsTaskThreadId(id));
+    }
+  }
 }
