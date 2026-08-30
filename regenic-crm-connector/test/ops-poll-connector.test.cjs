@@ -3,7 +3,6 @@ const { describe, it } = require("node:test");
 const { conversationId, verifyPollConnectorConformance } = require("@regenic/domain");
 const {
   CrmClient,
-  CrmListFoldError,
   CrmOpsPollConnector,
   formatSeenCursor,
 } = require("../dist");
@@ -92,7 +91,7 @@ describe("CrmOpsPollConnector", () => {
     assert.equal(result.next_cursor.includes("task-2"), false);
   });
 
-  it("fails the poll when a gone task cannot be folded", async () => {
+  it("drops a gone task from seen when the host cannot fold the list", async () => {
     const first = createConnector({
       "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
         items: [sampleOpsTask()],
@@ -103,10 +102,12 @@ describe("CrmOpsPollConnector", () => {
       "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, { items: [] }),
       "GET /internal/regenic/ops-tasks/task-1": jsonResponse(404),
     });
-    await assert.rejects(
-      () => connector.poll({ value: created.next_cursor }),
-      (error) => error instanceof CrmListFoldError && /hideThread is required/.test(error.message),
+    const result = await connector.poll({ value: created.next_cursor });
+    assert.equal(
+      result.batch.records.some((record) => record.operation === "tombstone"),
+      false,
     );
+    assert.equal(result.next_cursor.includes("task-1"), false);
   });
 
   it("keeps a gone task in seen when fold write fails transiently", async () => {

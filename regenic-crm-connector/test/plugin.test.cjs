@@ -66,6 +66,13 @@ describe("CRM drivers and plugins", () => {
       crmOrderReviewDriver.subjectCatalog(),
       crmOpsReviewDriver.subjectCatalog(),
     );
+    const manifest = require("../package.json").regenic;
+    assert.equal(manifest.plugin, true);
+    assert.deepEqual(manifest.contributes.drivers, [
+      "crmOpsReviewDriver",
+      "crmOrderReviewDriver",
+    ]);
+    assert.equal(manifest.engines.regenic, "1.0");
     assert.equal(crmOpsReviewDriver.createThread, undefined);
     assert.equal(crmOpsReviewDriver.bindEgress, undefined);
     assert.equal(crmOpsReviewDriver.outboundId, undefined);
