@@ -73,8 +73,8 @@ describe("CRM locators", () => {
     assert.equal(ORDER_UNIT_KIND, "crm.order_review");
     assert.deepEqual(crmSubjectCatalog(), {
       kinds: [
-        { id: "crm.ops_review", label: "邮件提报待审" },
-        { id: "crm.order_review", label: "订单 AI 内审" },
+        { id: "crm.ops_review", label: "kind.opsReview" },
+        { id: "crm.order_review", label: "kind.orderReview" },
       ],
     });
   });

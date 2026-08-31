@@ -25,7 +25,6 @@ import {
   type CrmFetch,
 } from "./crm-client";
 import {
-  CRM_CHANNEL_LABEL,
   CRM_SOURCE,
   crmScopeOf,
   crmSubjectCatalog,
@@ -34,6 +33,7 @@ import {
   orderStreamKey,
   writeBackLabels,
 } from "./locators";
+import { crmLocaleTables } from "./locales";
 import { crmOrderReviewPlugin } from "./plugin";
 import { answerOrderPrompt, listOrderPrompts } from "./prompts";
 import { orderConversationLabel } from "./records";
@@ -88,23 +88,25 @@ export const crmOrderReviewDriver: ChannelDriver = {
     return mountOrderStream(host, installation, env);
   },
 
+  locales() {
+    return crmLocaleTables;
+  },
+
   subjectCatalog() {
     return crmSubjectCatalog();
   },
 
   installCatalog() {
     return {
-      title: "CRM order review",
-      channel_label: CRM_CHANNEL_LABEL,
-      description:
-        "Private plugin. Pulls orders whose AI internal review is waiting for a human.",
-      credential_hint:
-        "CRM base URL in the form; REGENIC_CRM_SHARED_SECRET for prod caller auth; REGENIC_CRM_TOKEN optional JWT",
+      title: "catalog.orderTitle",
+      channel_label: "catalog.channelLabel",
+      description: "catalog.orderDescription",
+      credential_hint: "catalog.credentialHint",
       singleton: true,
       fields: crmCatalogFields([
         {
           key: "max_open_order_reviews",
-          label: "Max open order reviews",
+          label: "field.maxOpenOrders",
           required: false,
           default: "50",
           placeholder: "50",
@@ -118,8 +120,10 @@ export const crmOrderReviewDriver: ChannelDriver = {
 
   presentInstall(installation) {
     return {
-      label: "Order internal review",
-      detail: crmInstallDetail(installation.config, "max_open_order_reviews", "50"),
+      label: "present.order",
+      detail: {
+        literal: crmInstallDetail(installation.config, "max_open_order_reviews", "50"),
+      },
     };
   },
 

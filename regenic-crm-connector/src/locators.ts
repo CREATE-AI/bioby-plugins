@@ -121,8 +121,8 @@ export function parseOrderReviewResult(value: string): OrderReviewResult | undef
 export function crmSubjectCatalog(): SubjectCatalog {
   return {
     kinds: [
-      { id: OPS_UNIT_KIND, label: OPS_UNIT_KIND_LABEL },
-      { id: ORDER_UNIT_KIND, label: ORDER_UNIT_KIND_LABEL },
+      { id: OPS_UNIT_KIND, label: "kind.opsReview" },
+      { id: ORDER_UNIT_KIND, label: "kind.orderReview" },
     ],
   };
 }

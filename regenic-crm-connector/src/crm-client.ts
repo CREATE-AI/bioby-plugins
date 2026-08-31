@@ -21,9 +21,9 @@ export function crmCatalogFields(extra: DriverCatalogField[] = []): DriverCatalo
   return [
     {
       key: "base_url",
-      label: "CRM base URL",
+      label: "field.baseUrl",
       required: true,
-      placeholder: "https://crm-host/api",
+      placeholder: "field.baseUrl.placeholder",
     },
     ...extra,
   ];
@@ -34,17 +34,16 @@ export function crmCatalogPrerequisites() {
     {
       kind: "env" as const,
       key: CRM_SHARED_SECRET_ENV,
-      label: "CRM internal shared secret",
+      label: "prereq.secret",
       required: false,
-      hint:
-        "Production CRM: same value as INTERNAL_AUTH_REGENIC_SHARED_SECRET. Sent as X-Regenic-Key, not Authorization.",
+      hint: "prereq.secret.hint",
     },
     {
       kind: "env" as const,
       key: CRM_TOKEN_ENV,
-      label: "CRM reporting-ops token",
+      label: "prereq.token",
       required: false,
-      hint: "Optional JWT. When set, CRM must scope to that reporting-ops user. A bad token must 401. Do not put the shared secret here.",
+      hint: "prereq.token.hint",
     },
   ];
 }
@@ -62,13 +61,11 @@ export function crmProbeCatalog(
     services: {
       "crm-connector": {
         ready: true,
-        hint: "Private CRM connector is loaded. Set the CRM base URL in the connector form.",
+        hint: "probe.loaded",
       },
       crm: {
         ready: leftoverUrl,
-        hint: leftoverUrl
-          ? "Legacy REGENIC_CRM_BASE_URL is set. Save the connector form to move it into config."
-          : "CRM base URL is not on the process env. Set it in the connector form.",
+        hint: leftoverUrl ? "probe.legacyUrl" : "probe.noEnvUrl",
       },
     },
   };
