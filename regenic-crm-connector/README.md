@@ -73,7 +73,7 @@ await host.plugin(crmOrderReviewPlugin, {
 
 ## 两条队列
 
-- `crm-ops-review`：邮件提报 `PENDING_REVIEW` → DSH 结论 → `POST .../ops-tasks/{id}/complete`
+- `crm-ops-review`：工单类型 **邮件提报待审**。邮件提报 `PENDING_REVIEW` → DSH 四决策 + scene → `POST .../ops-tasks/{id}/complete`。写回约定见 [docs/ops-review-email-submit.md](docs/ops-review-email-submit.md)。
 - `crm-order-review`：AI 内审待人工 → 结论 → `POST .../orders/{id}/internal-review`
 
 禁止互相调用。连接器不发信、不提报、不单独打 change-log。无 DSH / 执行器结论时不得自行 complete。

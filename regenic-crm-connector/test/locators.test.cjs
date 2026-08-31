@@ -50,8 +50,10 @@ describe("CRM locators", () => {
   it("keeps stream keys and action vocabularies separate", () => {
     assert.equal(opsStreamKey("scoped"), "crm:pending-ops:scoped");
     assert.equal(orderStreamKey("all"), "crm:pending-review:all");
-    assert.equal(parseOpsCompleteAction("继续自动化"), "APPROVE_AND_CONTINUE");
-    assert.equal(parseOpsCompleteAction("CLOSE_TASK"), "CLOSE_TASK");
+    assert.equal(parseOpsCompleteAction("发信并关单"), "SEND_AND_CLOSE");
+    assert.equal(parseOpsCompleteAction("CLOSE_TASK"), "CLOSE_ONLY");
+    assert.equal(parseOpsCompleteAction("LEAVE_PENDING"), "LEAVE_PENDING");
+    assert.equal(parseOpsCompleteAction("APPROVE_AND_CONTINUE"), undefined);
     assert.equal(parseOpsCompleteAction("APPROVED"), undefined);
     assert.equal(parseOrderReviewResult("通过"), "APPROVED");
     assert.equal(parseOrderReviewResult("不通过"), "REJECTED");
@@ -61,10 +63,15 @@ describe("CRM locators", () => {
     assert.equal(parseOrderReviewResult("CLOSE_TASK"), undefined);
     assert.deepEqual(writeBackLabels("REJECTED"), ["REJECTED", "不通过"]);
     assert.deepEqual(writeBackLabels("APPROVED"), ["APPROVED", "通过"]);
-    assert.deepEqual(writeBackLabels("CLOSE_TASK"), ["CLOSE_TASK", "关闭任务"]);
-    assert.deepEqual(writeBackLabels("APPROVE_AND_CONTINUE"), [
-      "APPROVE_AND_CONTINUE",
-      "继续自动化",
+    assert.deepEqual(writeBackLabels("CLOSE_ONLY"), [
+      "CLOSE_ONLY",
+      "CLOSE_TASK",
+      "仅关单",
+      "关闭任务",
+    ]);
+    assert.deepEqual(writeBackLabels("SEND_AND_CLOSE"), [
+      "SEND_AND_CLOSE",
+      "发信并关单",
     ]);
   });
 

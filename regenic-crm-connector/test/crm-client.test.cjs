@@ -145,7 +145,8 @@ describe("CrmClient", () => {
     });
     const client = new CrmClient({ baseUrl: "https://crm.internal", fetch });
     await client.completeOpsTask("task-1", {
-      action: "APPROVE_AND_CONTINUE",
+      action: "SEND_AND_CLOSE",
+      scene: "NEED_QUOTE_BRIEF",
       comment: "go",
     });
     await client.submitOrderInternalReview("pf-1", {
@@ -154,7 +155,8 @@ describe("CrmClient", () => {
     });
     assert.equal(fetch.calls[0].pathname, "/internal/regenic/ops-tasks/task-1/complete");
     assert.equal(fetch.calls[1].pathname, "/internal/regenic/orders/pf-1/internal-review");
-    assert.equal(JSON.parse(fetch.calls[0].body).action, "APPROVE_AND_CONTINUE");
+    assert.equal(JSON.parse(fetch.calls[0].body).action, "SEND_AND_CLOSE");
+    assert.equal(JSON.parse(fetch.calls[0].body).scene, "NEED_QUOTE_BRIEF");
     assert.equal(JSON.parse(fetch.calls[1].body).result, "APPROVED");
   });
 
@@ -197,7 +199,7 @@ describe("CrmClient", () => {
     assert.equal(fetch.calls[0].pathname, "/api/internal/regenic/pending-ops-tasks");
   });
 
-  it("does not invent APPROVE_AND_CONTINUE when CRM omits allowedActions", async () => {
+  it("defaults omitted allowedActions to the four ops decisions", async () => {
     const task = sampleOpsTask();
     delete task.reviewGuide.allowedActions;
     const fetch = createFetch({
@@ -205,7 +207,10 @@ describe("CrmClient", () => {
     });
     const client = new CrmClient({ baseUrl: "https://crm.internal", fetch });
     assert.deepEqual((await client.listPendingOpsTasks())[0].reviewGuide.allowedActions, [
-      "CLOSE_TASK",
+      "SEND_AND_CLOSE",
+      "SUBMIT_THEN_CLOSE",
+      "LEAVE_PENDING",
+      "CLOSE_ONLY",
     ]);
   });
 

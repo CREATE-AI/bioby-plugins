@@ -4,9 +4,10 @@ import {
   type ConnectorCatalogProbe,
   type DriverCatalogField,
 } from "@regenic/domain";
-import type {
-  OpsCompleteAction,
-  OrderReviewResult,
+import {
+  parseOpsCompleteAction,
+  type OpsCompleteAction,
+  type OrderReviewResult,
 } from "./locators";
 
 export const CRM_BASE_URL_ENV = "REGENIC_CRM_BASE_URL";
@@ -101,6 +102,12 @@ export class CrmApiError extends Error {
     super(message);
     this.name = "CrmApiError";
   }
+}
+
+export interface CrmSubmitQuote {
+  raw: string;
+  amount?: number;
+  currency?: string;
 }
 
 export interface CrmOpsReviewGuide {
@@ -257,12 +264,22 @@ export class CrmClient {
 
   async completeOpsTask(
     taskId: string,
-    input: { action: OpsCompleteAction; comment: string },
+    input: {
+      action: OpsCompleteAction;
+      scene?: string;
+      submit_quote?: CrmSubmitQuote;
+      comment: string;
+    },
   ): Promise<void> {
     await this.request(
       "POST",
       `/internal/regenic/ops-tasks/${encodeURIComponent(taskId)}/complete`,
-      { action: input.action, comment: input.comment },
+      {
+        action: input.action,
+        scene: input.scene,
+        submit_quote: input.submit_quote,
+        comment: input.comment,
+      },
     );
   }
 
@@ -300,7 +317,7 @@ export class CrmClient {
   private async request(
     method: "GET" | "POST",
     path: string,
-    body?: Record<string, string>,
+    body?: Record<string, unknown>,
   ): Promise<unknown> {
     const headers: Record<string, string> = { accept: "application/json" };
     if (this.sharedSecret) {
@@ -738,13 +755,20 @@ function parseReviewGuide(
   };
 }
 
+const DEFAULT_OPS_ACTIONS: OpsCompleteAction[] = [
+  "SEND_AND_CLOSE",
+  "SUBMIT_THEN_CLOSE",
+  "LEAVE_PENDING",
+  "CLOSE_ONLY",
+];
+
 function parseAllowedOpsActions(value: unknown): OpsCompleteAction[] {
   if (!isObject(value)) {
-    return ["CLOSE_TASK"];
+    return [...DEFAULT_OPS_ACTIONS];
   }
   const raw = readAllowedActionsField(value);
   if (raw === undefined) {
-    return ["CLOSE_TASK"];
+    return [...DEFAULT_OPS_ACTIONS];
   }
   return parseAllowedList(raw);
 }
@@ -774,10 +798,8 @@ function parseAllowedList(raw: unknown): OpsCompleteAction[] {
           : isObject(item)
             ? stringValue(item.action ?? item.label)
             : undefined;
-      if (label === "APPROVE_AND_CONTINUE" || label === "CLOSE_TASK") {
-        return [label];
-      }
-      return [];
+      const parsed = label ? parseOpsCompleteAction(label) : undefined;
+      return parsed ? [parsed] : [];
     }),
   );
 }

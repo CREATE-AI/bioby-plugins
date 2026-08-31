@@ -46,7 +46,7 @@ function sampleOpsTask(overrides = {}) {
       headline: "报价不确定，不敢自动回邮",
       rationale: "达人改了档期。",
       suggestedNext: "确认后继续回邮并提报",
-      allowedActions: ["APPROVE_AND_CONTINUE", "CLOSE_TASK"],
+      allowedActions: ["SEND_AND_CLOSE", "SUBMIT_THEN_CLOSE", "LEAVE_PENDING", "CLOSE_ONLY"],
     },
     project: {
       projectFieldId: "pf-1",

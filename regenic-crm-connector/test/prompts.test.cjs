@@ -16,7 +16,7 @@ describe("CRM prompts", () => {
       "GET /internal/regenic/ops-tasks/task-1": jsonResponse(
         200,
         sampleOpsTask({
-          reviewGuide: { headline: "只能关", allowedActions: ["CLOSE_TASK"] },
+          reviewGuide: { headline: "只能关", allowedActions: ["CLOSE_ONLY"] },
         }),
       ),
     });
@@ -26,7 +26,7 @@ describe("CRM prompts", () => {
     );
     assert.deepEqual(
       prompts[0].questions[0].options.map((option) => option.label),
-      ["CLOSE_TASK"],
+      ["CLOSE_ONLY", "NO_FOLLOW", "NOT_OUTREACH"],
     );
   });
 
@@ -83,7 +83,7 @@ describe("CRM prompts", () => {
       "GET /internal/regenic/ops-tasks/task-1": jsonResponse(
         200,
         sampleOpsTask({
-          reviewGuide: { allowedActions: ["CLOSE_TASK"] },
+          reviewGuide: { allowedActions: ["CLOSE_ONLY"] },
         }),
       ),
     });
@@ -94,7 +94,7 @@ describe("CRM prompts", () => {
           "ops_task:task-1",
           {
             prompt_id: "crm:ops:task-1",
-            answers: [{ id: "decision", selected: ["APPROVE_AND_CONTINUE"] }],
+            answers: [{ id: "decision", selected: ["SEND_AND_CLOSE"] }],
           },
         ),
       (error) => error instanceof ChannelDriverError,
@@ -116,20 +116,39 @@ describe("CRM prompts", () => {
       {
         prompt_id: "crm:ops:task-1",
         answers: [
-          { id: "decision", selected: ["APPROVE_AND_CONTINUE"], custom: "档期已确认" },
+          { id: "decision", selected: ["SEND_AND_CLOSE"] },
         ],
       },
     );
     assert.equal(result.accepted, true);
     assert.equal(fetch.calls[1].pathname, "/internal/regenic/ops-tasks/task-1/complete");
     const body = JSON.parse(fetch.calls[1].body);
-    assert.equal(body.action, "APPROVE_AND_CONTINUE");
+    assert.equal(body.action, "SEND_AND_CLOSE");
+    assert.equal(body.scene, undefined);
     assert.match(body.comment, /source=regenic/);
-    assert.match(body.comment, /档期已确认/);
     assert.equal(
       fetch.calls.some((call) => call.pathname.includes("/internal-review")),
       false,
     );
+  });
+
+  it("maps a scene key on the first line to the CRM action", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
+      "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(204),
+    });
+    const result = await answerOpsPrompt(
+      new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+      "ops_task:task-1",
+      {
+        prompt_id: "crm:ops:task-1",
+        answers: [{ id: "decision", selected: ["NEED_QUOTE_BRIEF"] }],
+      },
+    );
+    assert.equal(result.accepted, true);
+    const body = JSON.parse(fetch.calls.at(-1).body);
+    assert.equal(body.action, "SEND_AND_CLOSE");
+    assert.equal(body.scene, "NEED_QUOTE_BRIEF");
   });
 
   it("does not infer an order review result from narrative custom text", async () => {

@@ -18,27 +18,48 @@ import {
   type OrderReviewResult,
 } from "./locators";
 import { opsPromptId } from "./locators";
+import { actionForScene, parseOpsScene, scenesForAction } from "./scenes";
 
 export function opsTaskPrompt(task: CrmOpsTask): ThreadPrompt {
+  const allowed = task.reviewGuide.allowedActions;
+  const options = [
+    ...allowed.map((action) => ({
+      label: action,
+      description: actionDescription(action),
+    })),
+    ...allowed.flatMap((action) =>
+      scenesForAction(action).map((scene) => ({
+        label: scene,
+        description: actionDescription(action),
+      })),
+    ),
+  ];
   return {
     prompt_id: opsPromptId(task.id),
     presentation: "choice",
     title: "邮件提报待审",
-    detail: task.reviewGuide.headline ?? "DSH 判断后由连接器自动 complete，不要无人结论时猜动作。",
+    detail: task.reviewGuide.headline ?? "DSH 判断后由连接器自动 complete，不要无人结论时猜动作。第一行写四决策或 scene 键。",
     questions: [
       {
         id: "decision",
-        prompt: "根据工单正文判断如何处理该运营任务",
-        options: task.reviewGuide.allowedActions.map((action) => ({
-          label: action,
-          description:
-            action === "APPROVE_AND_CONTINUE"
-              ? "继续自动化（回邮 / 自动提报）"
-              : "关闭任务，不再往下走",
-        })),
+        prompt: "根据工单正文判断如何处理该运营任务（第一行：四决策或 scene 键）",
+        options,
       },
     ],
   };
+}
+
+function actionDescription(action: OpsCompleteAction): string {
+  switch (action) {
+    case "SEND_AND_CLOSE":
+      return "用 CRM scene 模板回邮后关单";
+    case "SUBMIT_THEN_CLOSE":
+      return "按 submit_quote 提报，可选收悉回邮后关单";
+    case "LEAVE_PENDING":
+      return "不发信、不关单，留待真人";
+    case "CLOSE_ONLY":
+      return "不发信，直接关单";
+  }
 }
 
 export function orderReviewPrompt(order: CrmOrder): ThreadPrompt {
@@ -108,7 +129,7 @@ export async function answerOpsPrompt(
   if (!taskId || !fromPrompt || taskId !== fromPrompt) {
     throw new ChannelDriverError("invalid_config", "CRM ops prompt_id does not match this thread");
   }
-  const action = requireOpsAction(answer);
+  const conclusion = parseOpsConclusion(answer);
   let task: CrmOpsTask;
   try {
     task = await client.getOpsTask(taskId);
@@ -121,20 +142,21 @@ export async function answerOpsPrompt(
   if (!isEmailSubmitPending(task)) {
     return { accepted: true };
   }
-  if (!task.reviewGuide.allowedActions.includes(action)) {
+  if (!task.reviewGuide.allowedActions.includes(conclusion.action)) {
     throw new ChannelDriverError(
       "invalid_config",
-      `DSH action ${action} is not allowed by this task reviewGuide`,
+      `DSH action ${conclusion.action} is not allowed by this task reviewGuide`,
     );
   }
   try {
     await client.completeOpsTask(taskId, {
-      action,
+      action: conclusion.action,
+      scene: conclusion.scene,
       comment: auditComment({
         queue: "ops",
         hasToken: client.hasToken,
         reportingOperationsUserId: task.reportingOperationsUserId,
-        promptText: promptText(answer, action),
+        promptText: promptText(answer, conclusion.action),
       }),
     });
     return { accepted: true };
@@ -144,6 +166,34 @@ export async function answerOpsPrompt(
     }
     throw error;
   }
+}
+
+function parseOpsConclusion(answer: PromptAnswer): {
+  action: OpsCompleteAction;
+  scene?: string;
+} {
+  const decision = answer.answers.find((item) => item.id === "decision") ?? answer.answers[0];
+  const tokens = [
+    ...(decision?.selected ?? []),
+    ...(decision?.custom ? [decision.custom] : []),
+  ];
+  for (const token of tokens) {
+    const action = parseOpsCompleteAction(token);
+    if (action) {
+      return { action };
+    }
+    const scene = parseOpsScene(token);
+    if (scene) {
+      const mapped = actionForScene(scene);
+      if (mapped) {
+        return { action: mapped, scene };
+      }
+    }
+  }
+  throw new ChannelDriverError(
+    "invalid_config",
+    "CRM ops complete requires a DSH conclusion of SEND_AND_CLOSE, SUBMIT_THEN_CLOSE, LEAVE_PENDING, CLOSE_ONLY, or a known scene",
+  );
 }
 
 export async function answerOrderPrompt(
@@ -189,20 +239,6 @@ export async function answerOrderPrompt(
     }
     throw error;
   }
-}
-
-function requireOpsAction(answer: PromptAnswer): OpsCompleteAction {
-  const selected = selectedValues(answer);
-  const action = selected
-    .map((value) => parseOpsCompleteAction(value))
-    .find((value): value is OpsCompleteAction => value !== undefined);
-  if (!action) {
-    throw new ChannelDriverError(
-      "invalid_config",
-      "CRM ops complete requires a DSH conclusion of APPROVE_AND_CONTINUE or CLOSE_TASK",
-    );
-  }
-  return action;
 }
 
 function requireOrderResult(answer: PromptAnswer): OrderReviewResult {
