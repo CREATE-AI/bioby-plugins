@@ -8,6 +8,7 @@ import {
   type ConnectorInstallation,
   type JsonValue,
   type NewConnectorInstallation,
+  type SyncSource,
 } from "@regenic/domain";
 import {
   CRM_TOKEN_ENV,
@@ -37,6 +38,7 @@ import { crmLocaleTables } from "./locales";
 import { answerOpsPrompt, listOpsPrompts } from "./prompts";
 import { crmOpsReviewPlugin } from "./plugin";
 import { opsConversationLabel } from "./records";
+import { createCrmOpsSyncSource } from "./sync-source";
 
 export const crmOpsReviewDriver: ChannelDriver = {
   connector_type: OPS_CONNECTOR_TYPE,
@@ -82,6 +84,12 @@ export const crmOpsReviewDriver: ChannelDriver = {
 
   async resolveStreams(installation, host, env) {
     return [await mountOpsStream(host, installation, env)];
+  },
+
+  async bindSyncSource(installation, _host, env): Promise<SyncSource> {
+    return createCrmOpsSyncSource(
+      crmScopeOf(crmHasToken(env, installation.credentials_ref)),
+    );
   },
 
   async resolveThreadStream(installation, _thread, host, env) {
