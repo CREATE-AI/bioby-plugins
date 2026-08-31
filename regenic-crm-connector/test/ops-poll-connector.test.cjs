@@ -49,6 +49,11 @@ describe("CrmOpsPollConnector", () => {
     assert.match(body, /报价不确定/);
     assert.match(body, /crm:order:pf-1/);
     assert.match(body, /建议回邮底稿/);
+    assert.match(body, /### 最近来信/);
+    assert.match(body, /达人问能否改期/);
+    assert.match(body, /### 往来摘要/);
+    assert.match(body, /folder=SENT/);
+    assert.doesNotMatch(body, /crm:mail:/);
     assert.equal(
       fetch.calls.some((call) => call.method === "POST"),
       false,

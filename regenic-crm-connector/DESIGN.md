@@ -150,10 +150,11 @@ bioby-plugins/regenic-crm-connector/    # @bioby/regenic-crm-connector
 
 - 任务 locator、状态、`taskType`、`nextAction`（如 `NEED_MANUAL_REVIEW`）
 - Agent 为什么转人工（`reviewGuide.headline` / rationale）
-- 建议下一步（四决策口径：发信关单 / 提报关单 / 留待审 / 仅关单）
+- 建议下一步（四决策口径：发信关单 / 提报关单 / 留待审 / 仅关单；不要打开收件箱）
 - 引导轮次、`quoteLifecycleStatus`（DSH 选 scene 用）
 - 关联订单：项目、`clientRequirement` 摘要、达人、报价
-- 关联邮件：主题、最近来信摘要、`proposedReply` 底稿
+- 关联邮件：主题、锚点最近来信正文摘要（不是 rationale）、`threadDigest`、解析报价 / 附件数、`proposedReply` 底稿
+- `crm:mail:<id>` 是 P1 资源，P0 不作为可拉取 locator；全文写在 body 里
 
 metadata 可另存结构化 JSON，P0 验收不依赖桌面能画 JSON。
 

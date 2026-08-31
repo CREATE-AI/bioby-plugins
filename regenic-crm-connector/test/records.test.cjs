@@ -1,7 +1,22 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { formatOrderBody, opsTaskRecord, orderRecord } = require("../dist/records");
+const { formatOrderBody, formatOpsBody, opsTaskRecord, orderRecord } = require("../dist/records");
 const { sampleOpsTask, sampleOrder, surfaceOf } = require("./helpers.cjs");
+
+describe("formatOpsBody", () => {
+  it("embeds inbound mail and thread digest instead of a mail locator", () => {
+    const body = formatOpsBody(sampleOpsTask());
+    assert.match(body, /# 邮件提报待审/);
+    assert.match(body, /### 最近来信/);
+    assert.match(body, /达人问能否改期/);
+    assert.match(body, /### 往来摘要/);
+    assert.match(body, /folder=SENT/);
+    assert.match(body, /我方已发引导轮次: 1/);
+    assert.match(body, /报价生命周期: NONE/);
+    assert.match(body, /emailInboxId: m-1/);
+    assert.doesNotMatch(body, /crm:mail:/);
+  });
+});
 
 describe("formatOrderBody", () => {
   it("assembles AI review context into the ticket body", () => {

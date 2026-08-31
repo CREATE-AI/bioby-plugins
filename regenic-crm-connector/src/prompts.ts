@@ -22,29 +22,27 @@ import { actionForScene, parseOpsScene, scenesForAction } from "./scenes";
 
 export function opsTaskPrompt(task: CrmOpsTask): ThreadPrompt {
   const allowed = task.reviewGuide.allowedActions;
-  const options = [
-    ...allowed.map((action) => ({
-      label: action,
-      description: actionDescription(action),
-    })),
-    ...allowed.flatMap((action) =>
-      scenesForAction(action).map((scene) => ({
-        label: scene,
-        description: actionDescription(action),
-      })),
-    ),
-  ];
+  const options = allowed.flatMap((action) => {
+    const scenes = scenesForAction(action);
+    if (scenes.length === 0) {
+      return [{ label: action, description: actionDescription(action) }];
+    }
+    return scenes.map((scene) => ({
+      label: scene,
+      description: sceneDescription(scene),
+    }));
+  });
   return {
     prompt_id: opsPromptId(task.id),
     presentation: "choice",
     title: "邮件提报待审",
     detail:
       task.reviewGuide.headline ??
-      "工单正文已含最近来信和往来摘要。根据正文选出第一行：四决策或 scene 键。不要打开收件箱，不要二次拉取邮件。",
+      "工单正文已含最近来信和往来摘要。根据正文选出第一行 scene 键。不要打开收件箱，不要二次拉取邮件。",
     questions: [
       {
         id: "decision",
-        prompt: "根据工单正文（最近来信 + 往来摘要）判断如何处理。第一行写四决策或 scene 键。不要打开收件箱。",
+        prompt: "根据工单正文（最近来信 + 往来摘要）选出 scene 键写在第一行。不要打开收件箱。",
         options,
       },
     ],
@@ -61,6 +59,55 @@ function actionDescription(action: OpsCompleteAction): string {
       return "不发信、不关单，留待真人";
     case "CLOSE_ONLY":
       return "不发信，直接关单";
+  }
+}
+
+function sceneDescription(scene: string): string {
+  switch (scene) {
+    case "NEED_QUOTE_GENERIC":
+      return "通用要报价模板回邮后关单";
+    case "NEED_QUOTE_BRIEF":
+      return "要 brief / 合作细节后关单";
+    case "NEED_QUOTE_FORMAT":
+      return "要报价格式（数字+币种）后关单";
+    case "NEED_QUOTE_BUDGET_ASK":
+      return "对方问预算，用要报价模板回后关单";
+    case "NEED_QUOTE_WHATSAPP":
+      return "引导回邮报价（勿转 WhatsApp）后关单";
+    case "NEED_QUOTE_GIFT":
+      return "礼品/置换合作，仍要报价后关单";
+    case "NEED_QUOTE_PLATFORM_OK":
+      return "平台可做，仍要报价后关单";
+    case "NEED_QUOTE_VERIFY_DOMAIN":
+      return "解释域名/发件身份后继续要报价关单";
+    case "NEED_QUOTE_VERIFY_CLIENT":
+      return "解释客户/品牌后继续要报价关单";
+    case "NEED_QUOTE_STALL":
+      return "已多次要价，简短再催一次后关单";
+    case "NEED_QUOTE_PAY_OR_DATE":
+      return "付款或档期问题，先要到报价后关单";
+    case "REJECT_OUR_NUMBER":
+      return "拒绝对方要我方出价，回模板后关单";
+    case "ASK_STATUS_IN_REVIEW":
+      return "已提报，回「审核中」模板后关单";
+    case "NEED_CONTEXT":
+      return "缺上下文，回询问模板后关单";
+    case "MORE_NAMES":
+      return "只要更多达人名单，回邮后关单（本线程已有报价应改 QUOTE_PLUS_Q）";
+    case "QUOTE_PLUS_Q":
+      return "按本线程报价提报，可选收悉回邮后关单";
+    case "QUOTE_UNPARSED_RANGE":
+      return "报价是区间，按最高价提报后关单";
+    case "REAL_HUMAN":
+      return "不发信、不关单，留待真人";
+    case "NO_FOLLOW":
+      return "无需跟进，不发信直接关单";
+    case "NOT_OUTREACH":
+      return "非建联邮件，不发信直接关单";
+    default: {
+      const action = actionForScene(scene);
+      return action ? actionDescription(action) : scene;
+    }
   }
 }
 

@@ -26,8 +26,30 @@ describe("CRM prompts", () => {
     );
     assert.deepEqual(
       prompts[0].questions[0].options.map((option) => option.label),
-      ["CLOSE_ONLY", "NO_FOLLOW", "NOT_OUTREACH"],
+      ["NO_FOLLOW", "NOT_OUTREACH"],
     );
+  });
+
+  it("lists scene keys only, not the four actions beside their default scene", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
+    });
+    const prompts = await listOpsPrompts(
+      new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+      "ops_task:task-1",
+    );
+    const labels = prompts[0].questions[0].options.map((option) => option.label);
+    assert.equal(labels.includes("NEED_QUOTE_GENERIC"), true);
+    assert.equal(labels.includes("QUOTE_PLUS_Q"), true);
+    assert.equal(labels.includes("REAL_HUMAN"), true);
+    assert.equal(labels.includes("SEND_AND_CLOSE"), false);
+    assert.equal(labels.includes("SUBMIT_THEN_CLOSE"), false);
+    assert.equal(labels.includes("LEAVE_PENDING"), false);
+    assert.equal(labels.includes("CLOSE_ONLY"), false);
+    const generic = prompts[0].questions[0].options.find(
+      (option) => option.label === "NEED_QUOTE_GENERIC",
+    );
+    assert.equal(generic.description, "通用要报价模板回邮后关单");
   });
 
   it("refuses to complete an ops task without a DSH conclusion", async () => {
