@@ -149,6 +149,60 @@ describe("CRM drivers and plugins", () => {
     await host.dispose();
   });
 
+  it("exposes a one-member SyncEngine directory for each CRM queue", async () => {
+    const ops = {
+      id: "ops-1",
+      org_id: "local-owner",
+      connector_type: "crm-ops-review",
+      status: "enabled",
+      config: { base_url: "https://crm.internal/api", max_open_tasks: "50" },
+      created_at: "2026-08-26T00:00:00.000Z",
+    };
+    const order = {
+      ...ops,
+      id: "order-1",
+      connector_type: "crm-order-review",
+      config: {
+        base_url: "https://crm.internal/api",
+        max_open_order_reviews: "50",
+      },
+    };
+    const opsPage = await (
+      await crmOpsReviewDriver.bindSyncSource(ops, {}, {})
+    ).listDirectory(null);
+    assert.deepEqual(opsPage, {
+      members: [
+        {
+          stream_key: "crm:pending-ops:all",
+          thread_id: "crm:ops",
+          label: "CRM 待审运营任务",
+          kind: "ops",
+        },
+      ],
+      complete: true,
+    });
+    const scoped = await (
+      await crmOpsReviewDriver.bindSyncSource(ops, {}, {
+        REGENIC_CRM_TOKEN: "jwt-test",
+      })
+    ).listDirectory(null);
+    assert.equal(scoped.members[0].stream_key, "crm:pending-ops:scoped");
+    const orderPage = await (
+      await crmOrderReviewDriver.bindSyncSource(order, {}, {})
+    ).listDirectory(null);
+    assert.deepEqual(orderPage, {
+      members: [
+        {
+          stream_key: "crm:pending-review:all",
+          thread_id: "crm:order",
+          label: "CRM 待人工内审订单",
+          kind: "order",
+        },
+      ],
+      complete: true,
+    });
+  });
+
   it("lets the registry route ops and order threads to different drivers", () => {
     const drivers = new ChannelDriverRegistry();
     registerCrmDrivers(drivers);
