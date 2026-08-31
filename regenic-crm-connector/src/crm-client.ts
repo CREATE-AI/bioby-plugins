@@ -131,12 +131,19 @@ export interface CrmOpsTask {
     clientRequirement?: string;
     talentName?: string;
     quote?: string;
+    quoteLifecycleStatus?: string;
   };
   mail?: {
     messageId?: string;
     subject?: string;
     latestInboundSummary?: string;
+    threadDigest?: string;
     proposedReply?: string;
+    hasQuotes?: boolean;
+    quotes?: string;
+    attachmentCount?: number;
+    quoteLifecycleStatus?: string;
+    quoteGuideOutboundCount?: number;
   };
   conversationLabel?: string;
 }
@@ -817,10 +824,20 @@ function parseProject(value: unknown): CrmOpsTask["project"] {
   );
   const talentName = stringValue(value.talentName ?? value.talent_name);
   const quote = stringValue(value.quote);
-  if (!projectFieldId && !name && !clientRequirement && !talentName && !quote) {
+  const quoteLifecycleStatus = stringValue(
+    value.quoteLifecycleStatus ?? value.quote_lifecycle_status,
+  );
+  if (
+    !projectFieldId &&
+    !name &&
+    !clientRequirement &&
+    !talentName &&
+    !quote &&
+    !quoteLifecycleStatus
+  ) {
     return undefined;
   }
-  return { projectFieldId, name, clientRequirement, talentName, quote };
+  return { projectFieldId, name, clientRequirement, talentName, quote, quoteLifecycleStatus };
 }
 
 function parseMail(value: unknown): CrmOpsTask["mail"] {
@@ -832,11 +849,43 @@ function parseMail(value: unknown): CrmOpsTask["mail"] {
   const latestInboundSummary = stringValue(
     value.latestInboundSummary ?? value.latest_inbound_summary,
   );
+  const threadDigest = stringValue(value.threadDigest ?? value.thread_digest);
   const proposedReply = stringValue(value.proposedReply ?? value.proposed_reply);
-  if (!messageId && !subject && !latestInboundSummary && !proposedReply) {
+  const quotes = stringValue(value.quotes);
+  const quoteLifecycleStatus = stringValue(
+    value.quoteLifecycleStatus ?? value.quote_lifecycle_status,
+  );
+  const hasQuotes = booleanValue(value.hasQuotes ?? value.has_quotes);
+  const attachmentCount = numberValue(value.attachmentCount ?? value.attachment_count);
+  const quoteGuideOutboundCount = numberValue(
+    value.quoteGuideOutboundCount ?? value.quote_guide_outbound_count,
+  );
+  if (
+    !messageId &&
+    !subject &&
+    !latestInboundSummary &&
+    !threadDigest &&
+    !proposedReply &&
+    !quotes &&
+    !quoteLifecycleStatus &&
+    hasQuotes === undefined &&
+    attachmentCount === undefined &&
+    quoteGuideOutboundCount === undefined
+  ) {
     return undefined;
   }
-  return { messageId, subject, latestInboundSummary, proposedReply };
+  return {
+    messageId,
+    subject,
+    latestInboundSummary,
+    threadDigest,
+    proposedReply,
+    hasQuotes,
+    quotes,
+    attachmentCount,
+    quoteLifecycleStatus,
+    quoteGuideOutboundCount,
+  };
 }
 
 async function defaultFetch(
@@ -862,6 +911,14 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function scalarValue(value: unknown): string | undefined {

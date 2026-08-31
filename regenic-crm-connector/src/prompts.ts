@@ -38,11 +38,13 @@ export function opsTaskPrompt(task: CrmOpsTask): ThreadPrompt {
     prompt_id: opsPromptId(task.id),
     presentation: "choice",
     title: "邮件提报待审",
-    detail: task.reviewGuide.headline ?? "DSH 判断后由连接器自动 complete，不要无人结论时猜动作。第一行写四决策或 scene 键。",
+    detail:
+      task.reviewGuide.headline ??
+      "工单正文已含最近来信和往来摘要。根据正文选出第一行：四决策或 scene 键。不要打开收件箱，不要二次拉取邮件。",
     questions: [
       {
         id: "decision",
-        prompt: "根据工单正文判断如何处理该运营任务（第一行：四决策或 scene 键）",
+        prompt: "根据工单正文（最近来信 + 往来摘要）判断如何处理。第一行写四决策或 scene 键。不要打开收件箱。",
         options,
       },
     ],

@@ -54,12 +54,18 @@ function sampleOpsTask(overrides = {}) {
       talentName: "小红",
       quote: "8000",
       clientRequirement: "要竖屏带货",
+      quoteLifecycleStatus: "NONE",
     },
     mail: {
       messageId: "m-1",
       subject: "档期确认",
       latestInboundSummary: "达人问能否改期。",
+      threadDigest: "--- folder=SENT\nplease quote\n--- [ANCHOR] folder=INBOX\n能否改期",
       proposedReply: "可以，我们改到下周。",
+      hasQuotes: false,
+      attachmentCount: 0,
+      quoteLifecycleStatus: "NONE",
+      quoteGuideOutboundCount: 1,
     },
     ...overrides,
   };

@@ -70,8 +70,9 @@ Recipe 只 match：`source=crm`、`record_class=task`、`thread_facet=ticket`、
 - locator、`status`、`taskType`、`nextAction`（多为 `NEED_MANUAL_REVIEW`）
 - `reviewGuide` 为何待审、建议下一步
 - 关联订单：项目、达人、`clientRequirement`、已有报价、`quoteLifecycleStatus`（未提报 / 审核中 / 已选中 / 已拒绝）
-- 关联邮件：主题、最近来信、`threadDigest` / 我方已发引导次数（`quoteGuideOutboundCount`）
+- 关联邮件：**最近来信正文摘要**（锚点 `EmailInbox` 正文，不是 `reviewGuide.rationale`）、`threadDigest`、解析报价 / 附件数 / 我方已发引导次数（`quoteGuideOutboundCount`）
 - 既有 `proposedReply` 仅作参考，**写回后发信以 CRM scene 模板为准**，不以旧底稿覆盖决策
+- **不要**把 `crm:mail:<id>` 当成可拉取资源（P1 未实现）。DSH 只读工单正文，禁止打开收件箱或二次拉邮件。
 
 ---
 
