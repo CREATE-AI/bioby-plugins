@@ -5,6 +5,7 @@ const {
   ChannelDriverRegistry,
   MemoryAuthorityStore,
   MemoryConnectorRegistry,
+  resolveCopyText,
   verifyChannelDriverConformance,
 } = require("@regenic/domain");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
@@ -58,10 +59,18 @@ describe("CRM drivers and plugins", () => {
     assert.equal(crmOrderReviewDriver.connector_protocol, "1.0");
     assert.deepEqual(crmOpsReviewDriver.subjectCatalog(), {
       kinds: [
-        { id: "crm.ops_review", label: "邮件提报待审" },
-        { id: "crm.order_review", label: "订单 AI 内审" },
+        { id: "crm.ops_review", label: "kind.opsReview" },
+        { id: "crm.order_review", label: "kind.orderReview" },
       ],
     });
+    assert.equal(
+      resolveCopyText(crmOpsReviewDriver.locales(), "zh", "kind.opsReview"),
+      "邮件提报待审",
+    );
+    assert.equal(
+      resolveCopyText(crmOpsReviewDriver.locales(), "en", "kind.orderReview"),
+      "Order AI review",
+    );
     assert.deepEqual(
       crmOrderReviewDriver.subjectCatalog(),
       crmOpsReviewDriver.subjectCatalog(),
@@ -170,8 +179,12 @@ describe("CRM drivers and plugins", () => {
   it("declares install catalog cards and write-back labels on the drivers", () => {
     const ops = crmOpsReviewDriver.installCatalog();
     const order = crmOrderReviewDriver.installCatalog();
-    assert.equal(ops.title, "CRM ops review");
-    assert.equal(ops.channel_label, "CRM");
+    assert.equal(ops.title, "catalog.opsTitle");
+    assert.equal(ops.channel_label, "catalog.channelLabel");
+    assert.equal(
+      resolveCopyText(crmOpsReviewDriver.locales(), "zh", ops.title),
+      "CRM 运营待审",
+    );
     assert.equal(ops.singleton, true);
     assert.equal(ops.fields[0].key, "base_url");
     assert.equal(ops.fields[0].required, true);
@@ -188,8 +201,8 @@ describe("CRM drivers and plugins", () => {
       ops.prerequisites.some((item) => item.key === "REGENIC_CRM_TOKEN"),
       true,
     );
-    assert.equal(order.title, "CRM order review");
-    assert.equal(order.channel_label, "CRM");
+    assert.equal(order.title, "catalog.orderTitle");
+    assert.equal(order.channel_label, "catalog.channelLabel");
     assert.equal(order.singleton, true);
     assert.equal(order.fields[0].key, "base_url");
     assert.equal(order.fields[1].key, "max_open_order_reviews");
@@ -216,8 +229,8 @@ describe("CRM drivers and plugins", () => {
       },
       created_at: "2026-08-26T00:00:00.000Z",
     }), {
-      label: "Email submit review",
-      detail: "crm.internal · 50",
+      label: "present.ops",
+      detail: { literal: "crm.internal · 50" },
     });
   });
 

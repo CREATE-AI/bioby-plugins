@@ -25,7 +25,6 @@ import {
   type CrmFetch,
 } from "./crm-client";
 import {
-  CRM_CHANNEL_LABEL,
   CRM_SOURCE,
   crmScopeOf,
   crmSubjectCatalog,
@@ -34,6 +33,7 @@ import {
   opsStreamKey,
   writeBackLabels,
 } from "./locators";
+import { crmLocaleTables } from "./locales";
 import { answerOpsPrompt, listOpsPrompts } from "./prompts";
 import { crmOpsReviewPlugin } from "./plugin";
 import { opsConversationLabel } from "./records";
@@ -88,23 +88,25 @@ export const crmOpsReviewDriver: ChannelDriver = {
     return mountOpsStream(host, installation, env);
   },
 
+  locales() {
+    return crmLocaleTables;
+  },
+
   subjectCatalog() {
     return crmSubjectCatalog();
   },
 
   installCatalog() {
     return {
-      title: "CRM ops review",
-      channel_label: CRM_CHANNEL_LABEL,
-      description:
-        "Private plugin. Pulls email-submit PENDING_REVIEW tasks; DSH decides, the connector completes.",
-      credential_hint:
-        "CRM base URL in the form; REGENIC_CRM_SHARED_SECRET for prod caller auth; REGENIC_CRM_TOKEN optional JWT",
+      title: "catalog.opsTitle",
+      channel_label: "catalog.channelLabel",
+      description: "catalog.opsDescription",
+      credential_hint: "catalog.credentialHint",
       singleton: true,
       fields: crmCatalogFields([
         {
           key: "max_open_tasks",
-          label: "Max open tasks",
+          label: "field.maxOpenTasks",
           required: false,
           default: "50",
           placeholder: "50",
@@ -118,8 +120,8 @@ export const crmOpsReviewDriver: ChannelDriver = {
 
   presentInstall(installation) {
     return {
-      label: "Email submit review",
-      detail: crmInstallDetail(installation.config, "max_open_tasks", "50"),
+      label: "present.ops",
+      detail: { literal: crmInstallDetail(installation.config, "max_open_tasks", "50") },
     };
   },
 
