@@ -10,6 +10,7 @@ export * from "./reconcile";
 export * from "./records";
 export * from "./prompts";
 export * from "./scenes";
+export * from "./sync-source";
 export * from "./ops-poll-connector";
 export * from "./order-poll-connector";
 export * from "./ops-driver";
