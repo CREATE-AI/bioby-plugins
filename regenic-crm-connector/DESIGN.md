@@ -77,7 +77,7 @@ CRM 任务 PENDING_REVIEW（邮件提报待审）
         → Recipe 启动 DSH：输出 action + scene + 可选 submit_quote
         → 连接器自动 complete（操作者 regenic）
         → CRM 按 scene 配置发信/提报，再关单（或 LEAVE_PENDING 留待审）
-        → 已关闭则对账 tombstone，inbox 拿掉
+        → 已关闭则折进「不显示」（与订单 AI 内审相同），不 tombstone
 ```
 
 ---
@@ -104,7 +104,7 @@ bioby-plugins/regenic-crm-connector/    # @bioby/regenic-crm-connector
 |---|---|---|
 | 待审运营任务 | `task` | 线程上唯一 task |
 | 任务仍待审、字段变了 | `revise` | 仍在当前工作 |
-| 已关单 / 删除 | **tombstone** | 才能离开 inbox；`LEAVE_PENDING` 仍待审，不 tombstone |
+| 已关单 / 删除 | **折进「不显示」** | 事件保留，Hidden 可打开；`LEAVE_PENDING` 仍待审，不折 |
 | 邮件正文、订单摘要 | `body` / 以后 `utterance` | 不是第二张 task |
 | DSH 结论 → 四决策 + scene | 执行器结果，经连接器 complete | 不入库为人话气泡 |
 
@@ -137,7 +137,7 @@ bioby-plugins/regenic-crm-connector/    # @bioby/regenic-crm-connector
 |---|---|---|
 | 进入待审 | create `task` | `crm:ops_task:<taskId>` |
 | 待审中更新（底稿、指引变了） | revise `task` | 不变 |
-| 已关单 / 消失 | tombstone | 不变；留待审不 tombstone |
+| 已关单 / 消失 | 折进「不显示」 | 不变；留待审不折 |
 | DSH 结论写回 | 连接器 `complete`（机器调用，不是等人点） | `crm:ops:<taskId>` |
 
 `conversation_label`：`{项目或达人} · 邮件提报待审`。`list_title`：`conversation`。
@@ -187,10 +187,12 @@ CRM 两层鉴权互不替代：
 
 ```text
 stream_key = crm:pending-ops:scoped | crm:pending-ops:all
-seen       = 已 ingest 未 tombstone 的 crm:ops_task:* 
+seen       = 已 ingest、仍待审的 crm:ops_task:*（含 parked）
+occupying  = seen 中尚无终端 Regenic 结论的，占 max_open_tasks
+parked     = 有 regenicComplete（含 LEAVE_PENDING）或 regenicLastAttempt
 ```
 
-`live[]` = 本轮待审列表。新的 create，变了 revise，`seen - live` tombstone。不能只靠列表 cursor 发现「已继续/已关闭」。
+`live[]` = occupying + parked + newcomers。新的 create，变了 revise，`seen - live` 折进「不显示」（不 tombstone）。`LEAVE_PENDING` / complete 400 不占窗口。不能只靠列表 cursor 发现「已继续/已关闭」。
 
 ### 10.3 CRM 接口（须配合改）
 
@@ -213,7 +215,9 @@ POST /internal/regenic/ops-tasks/{taskId}/complete
 - 操作者 / 审核人字段 = `regenic`
 - `comment` 带审计：`source=regenic`、有无 token、提报运营 id、DSH 原文（含 action/scene）
 - 有 token 时不能完工别人提报运营的任务（`404`）
-- 任务已不在 `PENDING_REVIEW` 且不是本轮刚关单 → `409`，连接器对账 tombstone
+- 任务已不在 `PENDING_REVIEW` 且不是本轮刚关单 → `409`，连接器对账折进「不显示」
+- complete 成功必须回任务快照：关单动作的 `status` 不再是待审；`LEAVE_PENDING` 必须带 `regenicComplete`。空 204 仅兼容旧环境
+- 同一 action 可幂等续跑（关单没落盘则再 close，已提报不再提一次）。400/500 写 `regenicLastAttempt`
 - **禁止**再把 `complete` 折成现网 `approve`（邮件提报待审不会接着跑）
 - 发哪封信由 CRM scene 配置决定，连接器只传 scene 键，不传正文、不选模板
 
@@ -273,7 +277,7 @@ ownsThread:     target 前缀 ops_task:  vs  order:
 - CRM：待审任务列表/详情 + `complete` 四决策 + scene 配置（见专项文档）
 - 拉 `PENDING_REVIEW` 邮件提报任务；工单类型 **邮件提报待审**；body 够 DSH 判断
 - **Recipe + DSH 判断 → 连接器自动 complete**（主路径，不可改成人工）
-- seen 对账 + tombstone
+- seen 对账 + 折进「不显示」
 - token = 提报运营；写回人 `regenic`
 - 内部挂载
 
@@ -316,7 +320,7 @@ ownsThread:     target 前缀 ops_task:  vs  order:
 3. 连接器不直接发信、不直接提报；话术在 CRM scene 配置。
 3b. 邮件提报待审禁止再走 `approve` → `IN_PROGRESS`。
 4. 账号范围 = 提报运营；写回身份 = `regenic`。
-5. 离开 inbox = tombstone + 对账。
+5. 已完成离开「显示」栏 = 折进「不显示」（与订单 AI 内审相同），不 tombstone。
 6. 一线程一 task：P0 = 运营任务；P1 = 待内审订单。
 7. 订单内审与运营任务解耦：见 §16。
 
@@ -357,7 +361,7 @@ P0 解决「任务卡住，**DSH 判完**后连接器自动让 CRM 回邮/提报
 - 共享 `seen` 集合、共享 `prompt_id` 前缀。
 - 执行器拿 CRM token 自己 PATCH 订单。
 
-允许共享（基础设施，不是业务耦合）：`REGENIC_CRM_*`、token→提报运营、审核人 `regenic`、tombstone 对账算法、`crm-client` 的 HTTP/鉴权。
+允许共享（基础设施，不是业务耦合）：`REGENIC_CRM_*`、token→提报运营、审核人 `regenic`、离开待审折进「不显示」的对账算法、`crm-client` 的 HTTP/鉴权。
 
 关联只许出现在 **只读上下文**：ops 线程的 body 可写「关联订单 id」；order 线程的 body 可写「关联任务 id」。点哪条只完工哪条。
 
@@ -409,7 +413,7 @@ prompt_id: crm:audit:<projectFieldId>
 options:   通过 → APPROVED ； 不通过 → REJECTED
 ```
 
-对账流独立：`seen` 只含 `crm:order:*`。离开待人工 → tombstone 本线程，不动任何 `ops_task` 线程。
+对账流独立：`seen` 只含 `crm:order:*`。离开待人工 → 折进「不显示」，不动任何 `ops_task` 线程。
 
 ### 16.6 验收（仅本队列）
 
@@ -419,7 +423,7 @@ options:   通过 → APPROVED ； 不通过 → REJECTED
 4. 绑定仅 match `order:` 的 Recipe 后，执行器可自动给出通过/不通过；写回后 CRM 内审变更，**且** change-log 多一条 `OPERATION`。
 5. 同一执行器跑完 **不得** 改变任何运营任务状态。
 6. 只调用 change-log 接口、不走 internal-review：内审状态不变（证明 log 不是旁路写）。
-7. 对账 tombstone 订单线程后，关联的 ops 线程若仍待审则仍在 inbox。
+7. 对账把订单线程折进「不显示」后，关联的 ops 线程若仍待审则仍在「显示」栏。
 
 ### 16.7 待确认（本队列）
 

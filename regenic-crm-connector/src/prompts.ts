@@ -211,7 +211,18 @@ export async function answerOpsPrompt(
     return { accepted: true };
   } catch (error) {
     if (error instanceof CrmApiError && error.status === 409) {
-      return { accepted: true };
+      let latest: CrmOpsTask | null = null;
+      try {
+        latest = await client.getOpsTask(taskId);
+      } catch (inner) {
+        if (inner instanceof CrmApiError && (inner.status === 404 || inner.status === 409)) {
+          return { accepted: true };
+        }
+        throw inner;
+      }
+      if (!isEmailSubmitPending(latest)) {
+        return { accepted: true };
+      }
     }
     throw error;
   }

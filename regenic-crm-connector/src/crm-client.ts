@@ -117,6 +117,21 @@ export interface CrmOpsReviewGuide {
   allowedActions: OpsCompleteAction[];
 }
 
+export interface CrmOpsRegenicComplete {
+  action?: string;
+  scene?: string;
+  at?: string;
+  sent?: boolean;
+  submitted?: boolean;
+}
+
+export interface CrmOpsRegenicLastAttempt {
+  action?: string;
+  scene?: string;
+  error?: string;
+  at?: string;
+}
+
 export interface CrmOpsTask {
   id: string;
   status: string;
@@ -125,6 +140,10 @@ export interface CrmOpsTask {
   updatedAt: string;
   reportingOperationsUserId?: string;
   reviewGuide: CrmOpsReviewGuide;
+  /** Successful complete. LEAVE_PENDING stays pending but no longer occupies the pull window. */
+  regenicComplete?: CrmOpsRegenicComplete;
+  /** Rejected complete (HTTP 400). Still pending; do not occupy a pull slot. */
+  regenicLastAttempt?: CrmOpsRegenicLastAttempt;
   project?: {
     projectFieldId?: string;
     name?: string;
@@ -278,16 +297,28 @@ export class CrmClient {
       comment: string;
     },
   ): Promise<void> {
-    await this.request(
-      "POST",
-      `/internal/regenic/ops-tasks/${encodeURIComponent(taskId)}/complete`,
-      {
-        action: input.action,
-        scene: input.scene,
-        submit_quote: input.submit_quote,
-        comment: input.comment,
-      },
+    const payload = unwrapPayload(
+      await this.request(
+        "POST",
+        `/internal/regenic/ops-tasks/${encodeURIComponent(taskId)}/complete`,
+        {
+          action: input.action,
+          scene: input.scene,
+          submit_quote: input.submit_quote,
+          comment: input.comment,
+        },
+      ),
     );
+    const task = parseOpsTask(payload);
+    if (!task) {
+      return;
+    }
+    if (isEmailSubmitPending(task) && !isOpsWindowParked(task)) {
+      throw new CrmApiError(
+        502,
+        `CRM complete left ops task ${taskId} pending without a parked outcome`,
+      );
+    }
   }
 
   async listPendingHumanOrders(): Promise<CrmOrder[]> {
@@ -638,7 +669,23 @@ function parseOpsTask(value: unknown): CrmOpsTask | undefined {
     project: parseProject(value.project ?? value.businessRef ?? value.order),
     mail: parseMail(value.mail ?? value.email),
     conversationLabel: stringValue(value.conversationLabel ?? value.conversation_label),
+    regenicComplete: parseRegenicComplete(value.regenicComplete ?? value.regenic_complete),
+    regenicLastAttempt: parseRegenicLastAttempt(
+      value.regenicLastAttempt ?? value.regenic_last_attempt,
+    ),
   };
+}
+
+/** AI already concluded; keep the inbox row, do not count against max_open_tasks. */
+export function isOpsWindowParked(task: CrmOpsTask): boolean {
+  if (task.regenicComplete?.action?.trim()) {
+    return true;
+  }
+  return Boolean(task.regenicLastAttempt);
+}
+
+export function occupiesOpsWindow(task: CrmOpsTask): boolean {
+  return !isOpsWindowParked(task);
 }
 
 function parseOrder(value: unknown): CrmOrder | undefined {
@@ -744,6 +791,33 @@ function parseAutoReviewLog(value: unknown): CrmOrderAutoReviewLog | undefined {
     logTime: scalarValue(value.logTime ?? value.log_time),
   };
   return hasDefined(log) ? log : undefined;
+}
+
+function parseRegenicComplete(value: unknown): CrmOpsRegenicComplete | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const complete: CrmOpsRegenicComplete = {
+    action: stringValue(value.action),
+    scene: stringValue(value.scene),
+    at: stringValue(value.at),
+    sent: booleanValue(value.sent),
+    submitted: booleanValue(value.submitted),
+  };
+  return hasDefined(complete) ? complete : undefined;
+}
+
+function parseRegenicLastAttempt(value: unknown): CrmOpsRegenicLastAttempt | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const attempt: CrmOpsRegenicLastAttempt = {
+    action: stringValue(value.action),
+    scene: stringValue(value.scene),
+    error: stringValue(value.error),
+    at: stringValue(value.at),
+  };
+  return hasDefined(attempt) ? attempt : undefined;
 }
 
 function parseReviewGuide(

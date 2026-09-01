@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
+const { conversationId } = require("@regenic/domain");
 const {
   CrmClient,
   CrmOrderPollConnector,
@@ -24,7 +25,11 @@ describe("CrmOrderPollConnector", () => {
     const result = await connector.poll(null);
     assert.equal(result.batch.records[0].type, "task");
     assert.equal(surfaceOf(result.batch.records[0]).unit_kind, "crm.order_review");
-    assert.equal(result.batch.records[0].thread.id, "crm:order:pf-1");
+    assert.equal(result.batch.records[0].thread.id, "order:pf-1");
+    assert.equal(
+      conversationId("crm", result.batch.records[0].external_id),
+      `crm:${result.batch.records[0].thread.id}`,
+    );
     const body = result.batch.records[0].content.find((part) => part.role === "body").text;
     assert.match(body, /订单 AI 内审待人工/);
     assert.doesNotMatch(body, /locator:|projectFieldId:|internalReviewStatus:/);

@@ -5,8 +5,10 @@ import {
   ORDER_UNIT_KIND,
   OPS_UNIT_KIND,
   orderExternalId,
+  orderTarget,
   orderThreadId,
   opsTaskExternalId,
+  opsTaskTarget,
   opsTaskThreadId,
 } from "./locators";
 import { withOperation } from "./reconcile";
@@ -31,7 +33,8 @@ export function opsTaskRecord(
     unit_kind: OPS_UNIT_KIND,
     thread_facet: "ticket",
     type: "task",
-    thread_id: opsTaskThreadId(task.id),
+    // Kernel threadIdOf prefixes source; pass ops_task:<id> so the conversation is crm:ops_task:<id>.
+    thread_id: opsTaskTarget(task.id),
     text: formatOpsBody(task),
     media_type: "text/markdown",
     content: [
@@ -65,7 +68,8 @@ export function orderRecord(
     unit_kind: ORDER_UNIT_KIND,
     thread_facet: "ticket",
     type: "task",
-    thread_id: orderThreadId(order.id),
+    // Kernel threadIdOf prefixes source; pass order:<id> so the conversation is crm:order:<id>.
+    thread_id: orderTarget(order.id),
     text: formatOrderBody(order),
     media_type: "text/markdown",
     content: [

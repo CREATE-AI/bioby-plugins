@@ -230,8 +230,15 @@ describe("CRM prompts", () => {
   });
 
   it("treats a 409 complete as already settled", async () => {
+    let gets = 0;
     const fetch = createFetch({
-      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
+      "GET /internal/regenic/ops-tasks/task-1": () => {
+        gets += 1;
+        return jsonResponse(
+          200,
+          sampleOpsTask({ status: gets === 1 ? "PENDING_REVIEW" : "CLOSED" }),
+        );
+      },
       "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(409, { error: "gone" }),
     });
     const result = await answerOpsPrompt(
@@ -243,5 +250,24 @@ describe("CRM prompts", () => {
       },
     );
     assert.equal(result.accepted, true);
+  });
+
+  it("does not treat a 409 as settled when the task is still pending", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
+      "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(409, { error: "conflict" }),
+    });
+    await assert.rejects(
+      () =>
+        answerOpsPrompt(
+          new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+          "ops_task:task-1",
+          {
+            prompt_id: "crm:ops:task-1",
+            answers: [{ id: "decision", selected: ["CLOSE_TASK"] }],
+          },
+        ),
+      /409|conflict|CRM/,
+    );
   });
 });

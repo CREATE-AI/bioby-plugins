@@ -1,4 +1,4 @@
-import { foldThreadByPolicy, type ListSurfaceStore } from "@regenic/domain";
+import { foldThreadByPolicy, unfold, writeHiddenPref, type ListSurfaceStore } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 
 export type HideThread = (threadId: string) => Promise<void>;
@@ -36,6 +36,22 @@ export function hideThreadFromHost(
   };
 }
 
+export function unhideThreadFromHost(
+  host: Host,
+  orgId: string,
+  now: () => string,
+): HideThread {
+  return async (threadId) => {
+    const store = conversationPrefStore(host);
+    if (!store) {
+      throw new CrmListFoldError(
+        `cannot unhide ${threadId}: host has no conversation pref store`,
+      );
+    }
+    await writeHiddenPref(store, orgId, threadId, unfold(), now());
+  };
+}
+
 /**
  * Fold confirmed-gone ids. Only successfully folded ids may leave `seen`
  * when a hide hook is wired. ConnectorHost has no `authority`, so production
@@ -65,6 +81,31 @@ export async function foldGoneIds(
     }
   }
   return folded;
+}
+
+export async function unhideReleasedIds(
+  ids: string[],
+  unhide: HideThread | undefined,
+  threadIdOf: (id: string) => string,
+): Promise<string[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+  if (!unhide) {
+    return ids;
+  }
+  const released: string[] = [];
+  for (const id of ids) {
+    try {
+      await unhide(threadIdOf(id));
+      released.push(id);
+    } catch (error) {
+      if (error instanceof CrmListFoldError) {
+        throw error;
+      }
+    }
+  }
+  return released;
 }
 
 function conversationPrefStore(host: Host): ConversationPrefStore | undefined {

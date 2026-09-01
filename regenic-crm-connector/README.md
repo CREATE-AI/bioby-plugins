@@ -9,7 +9,7 @@
 | 字段 | 必填 | 作用 |
 |---|---|---|
 | `base_url` | 是 | CRM 内网基址，须含 `/api`，例如 `https://crm-host/api` |
-| `max_open_tasks` / `max_open_order_reviews` | 否 | 同时打开上限，默认 50 |
+| `max_open_tasks` / `max_open_order_reviews` | 否 | 同时进行中的 AI 上限，默认 50。邮件提报里 `LEAVE_PENDING` / complete 400 不占坑 |
 
 ## 环境变量
 

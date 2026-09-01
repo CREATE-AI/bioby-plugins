@@ -40,10 +40,12 @@ export function orderStreamKey(scope: CrmScope): string {
   return `crm:pending-review:${scope}`;
 }
 
+/** Inbox conversation id after kernel `threadIdOf(source, target)`. */
 export function opsTaskThreadId(taskId: string): string {
   return `${CRM_SOURCE}:${opsTaskTarget(taskId)}`;
 }
 
+/** Inbox conversation id after kernel `threadIdOf(source, target)`. */
 export function orderThreadId(projectFieldId: string): string {
   return `${CRM_SOURCE}:${orderTarget(projectFieldId)}`;
 }
@@ -59,6 +61,8 @@ export function orderTarget(projectFieldId: string): string {
 /**
  * Kernel conversationId() is `source:` + external_id before the last colon.
  * `ops_task:<id>:task` therefore groups as `crm:ops_task:<id>`.
+ * Do not put `crm:ops_task:<id>` on `record.thread.id` — ingest does threadIdOf(source, thread.id)
+ * and would store `crm:crm:ops_task:<id>`, which the inbox cannot open.
  */
 export function opsTaskExternalId(taskId: string): string {
   return `${opsTaskTarget(taskId)}:${OPS_TASK_RECORD_SUFFIX}`;
