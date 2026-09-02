@@ -5,8 +5,10 @@ import {
   ORDER_UNIT_KIND,
   OPS_UNIT_KIND,
   orderExternalId,
+  orderTarget,
   orderThreadId,
   opsTaskExternalId,
+  opsTaskTarget,
   opsTaskThreadId,
 } from "./locators";
 import { withOperation } from "./reconcile";
@@ -31,7 +33,8 @@ export function opsTaskRecord(
     unit_kind: OPS_UNIT_KIND,
     thread_facet: "ticket",
     type: "task",
-    thread_id: opsTaskThreadId(task.id),
+    // Kernel threadIdOf prefixes source; pass ops_task:<id> so the conversation is crm:ops_task:<id>.
+    thread_id: opsTaskTarget(task.id),
     text: formatOpsBody(task),
     media_type: "text/markdown",
     content: [
@@ -65,7 +68,8 @@ export function orderRecord(
     unit_kind: ORDER_UNIT_KIND,
     thread_facet: "ticket",
     type: "task",
-    thread_id: orderThreadId(order.id),
+    // Kernel threadIdOf prefixes source; pass order:<id> so the conversation is crm:order:<id>.
+    thread_id: orderTarget(order.id),
     text: formatOrderBody(order),
     media_type: "text/markdown",
     content: [
@@ -116,7 +120,10 @@ export function formatOpsBody(task: CrmOpsTask): string {
     lines.push("", task.reviewGuide.rationale);
   }
   lines.push("", "## 建议下一步");
-  lines.push(task.reviewGuide.suggestedNext ?? "根据上下文选择继续自动化或关闭任务。");
+  lines.push(
+    task.reviewGuide.suggestedNext ??
+      "根据最近来信和往来摘要选出 scene 键，写在结论第一行。不要打开收件箱，不要二次拉取邮件。",
+  );
   if (task.project) {
     lines.push("", "## 关联订单");
     if (task.project.projectFieldId) {
@@ -125,6 +132,7 @@ export function formatOpsBody(task: CrmOpsTask): string {
     pushField(lines, "项目", task.project.name);
     pushField(lines, "达人", task.project.talentName);
     pushField(lines, "报价", task.project.quote);
+    pushField(lines, "报价生命周期", task.project.quoteLifecycleStatus);
     if (task.project.clientRequirement) {
       lines.push("", "### 客户需求", "", task.project.clientRequirement);
     }
@@ -132,14 +140,28 @@ export function formatOpsBody(task: CrmOpsTask): string {
   if (task.mail) {
     lines.push("", "## 关联邮件");
     if (task.mail.messageId) {
-      lines.push(`- locator: crm:mail:${task.mail.messageId}`);
+      lines.push(`- emailInboxId: ${task.mail.messageId}`);
     }
     pushField(lines, "主题", task.mail.subject);
+    if (task.mail.hasQuotes !== undefined) {
+      lines.push(`- hasQuotes: ${task.mail.hasQuotes}`);
+    }
+    pushField(lines, "解析报价", task.mail.quotes);
+    if (task.mail.attachmentCount !== undefined) {
+      lines.push(`- 附件数: ${task.mail.attachmentCount}`);
+    }
+    pushField(lines, "报价生命周期", task.mail.quoteLifecycleStatus);
+    if (task.mail.quoteGuideOutboundCount !== undefined) {
+      lines.push(`- 我方已发引导轮次: ${task.mail.quoteGuideOutboundCount}`);
+    }
     if (task.mail.latestInboundSummary) {
       lines.push("", "### 最近来信", "", task.mail.latestInboundSummary);
     }
+    if (task.mail.threadDigest) {
+      lines.push("", "### 往来摘要", "", task.mail.threadDigest);
+    }
     if (task.mail.proposedReply) {
-      lines.push("", "### 建议回邮底稿", "", task.mail.proposedReply);
+      lines.push("", "### 建议回邮底稿（仅参考，发信以 CRM scene 模板为准）", "", task.mail.proposedReply);
     }
   }
   return lines.join("\n");

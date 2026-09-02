@@ -22,6 +22,7 @@ function createConnector(routes, extras = {}) {
       max_open_tasks: extras.max_open_tasks ?? 50,
       now: () => "2026-08-26T00:00:00.000Z",
       hideThread: extras.hideThread,
+      unhideThread: extras.unhideThread,
     },
   );
   return { connector, fetch };
@@ -39,16 +40,21 @@ describe("CrmOpsPollConnector", () => {
     assert.equal(result.batch.records[0].operation, "create");
     assert.equal(result.batch.records[0].type, "task");
     assert.equal(surfaceOf(result.batch.records[0]).unit_kind, "crm.ops_review");
-    assert.equal(result.batch.records[0].thread.id, "crm:ops_task:task-1");
+    assert.equal(result.batch.records[0].thread.id, "ops_task:task-1");
     assert.equal(
       conversationId("crm", result.batch.records[0].external_id),
-      "crm:ops_task:task-1",
+      `crm:${result.batch.records[0].thread.id}`,
     );
     const body = result.batch.records[0].content.find((part) => part.role === "body").text;
     assert.match(body, /NEED_MANUAL_REVIEW/);
     assert.match(body, /报价不确定/);
     assert.match(body, /crm:order:pf-1/);
     assert.match(body, /建议回邮底稿/);
+    assert.match(body, /### 最近来信/);
+    assert.match(body, /达人问能否改期/);
+    assert.match(body, /### 往来摘要/);
+    assert.match(body, /folder=SENT/);
+    assert.doesNotMatch(body, /crm:mail:/);
     assert.equal(
       fetch.calls.some((call) => call.method === "POST"),
       false,
@@ -172,6 +178,118 @@ describe("CrmOpsPollConnector", () => {
     assert.match(result.next_cursor, /"task-1"/);
     assert.match(result.next_cursor, /"task-2"/);
     assert.equal(result.next_cursor.includes("task-3"), false);
+  });
+
+  it("does not ingest an unseen parked task into the open window", async () => {
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+          items: [
+            sampleOpsTask({
+              id: "task-parked",
+              regenicComplete: { action: "LEAVE_PENDING", scene: "REAL_HUMAN" },
+            }),
+            sampleOpsTask({ id: "task-new" }),
+          ],
+        }),
+      },
+      { max_open_tasks: 1 },
+    );
+    const result = await connector.poll(null);
+    const ids = result.batch.records.map((record) => record.external_id);
+    assert.deepEqual(ids, ["ops_task:task-new:task"]);
+    assert.equal(result.next_cursor.includes("task-parked"), false);
+    assert.match(result.next_cursor, /"task-new"/);
+  });
+
+  it("does not let LEAVE_PENDING occupy the max_open window", async () => {
+    const cursor = {
+      value: formatSeenCursor("all", { "task-parked": "old" }),
+    };
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+          items: [
+            sampleOpsTask({
+              id: "task-parked",
+              regenicComplete: { action: "LEAVE_PENDING", scene: "REAL_HUMAN" },
+            }),
+            sampleOpsTask({ id: "task-new" }),
+          ],
+        }),
+      },
+      { max_open_tasks: 1 },
+    );
+    const result = await connector.poll(cursor);
+    const operations = Object.fromEntries(
+      result.batch.records.map((record) => [record.external_id, record.operation]),
+    );
+    assert.equal(operations["ops_task:task-new:task"], "create");
+    assert.equal(operations["ops_task:task-parked:task"], undefined);
+    assert.match(result.next_cursor, /"task-parked"/);
+    assert.match(result.next_cursor, /"task-new"/);
+  });
+
+  it("does not let a rejected complete occupy the max_open window", async () => {
+    const cursor = {
+      value: formatSeenCursor("all", { "task-failed": "old" }),
+    };
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+          items: [
+            sampleOpsTask({
+              id: "task-failed",
+              regenicLastAttempt: {
+                action: "SUBMIT_THEN_CLOSE",
+                error: "SUBMIT_THEN_CLOSE requires submit_quote.raw",
+              },
+            }),
+            sampleOpsTask({ id: "task-new" }),
+          ],
+        }),
+      },
+      { max_open_tasks: 1 },
+    );
+    const result = await connector.poll(cursor);
+    const operations = Object.fromEntries(
+      result.batch.records.map((record) => [record.external_id, record.operation]),
+    );
+    assert.equal(operations["ops_task:task-new:task"], "create");
+    assert.match(result.next_cursor, /"task-failed"/);
+    assert.match(result.next_cursor, /"task-new"/);
+  });
+
+  it("releases a parked task from seen and unhides it instead of folding", async () => {
+    const hidden = [];
+    const shown = [];
+    const cursor = {
+      value: formatSeenCursor("all", { "task-parked": "old" }),
+    };
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, { items: [] }),
+        "GET /internal/regenic/ops-tasks/task-parked": jsonResponse(
+          200,
+          sampleOpsTask({
+            id: "task-parked",
+            regenicComplete: { action: "LEAVE_PENDING", scene: "REAL_HUMAN" },
+          }),
+        ),
+      },
+      {
+        hideThread: async (threadId) => {
+          hidden.push(threadId);
+        },
+        unhideThread: async (threadId) => {
+          shown.push(threadId);
+        },
+      },
+    );
+    const result = await connector.poll(cursor);
+    assert.equal(result.next_cursor.includes("task-parked"), false);
+    assert.deepEqual(hidden, []);
+    assert.deepEqual(shown, ["crm:ops_task:task-parked"]);
   });
 
   it("drops the seen set when token scope changes", async () => {

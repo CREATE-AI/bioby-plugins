@@ -46,7 +46,7 @@ function sampleOpsTask(overrides = {}) {
       headline: "报价不确定，不敢自动回邮",
       rationale: "达人改了档期。",
       suggestedNext: "确认后继续回邮并提报",
-      allowedActions: ["APPROVE_AND_CONTINUE", "CLOSE_TASK"],
+      allowedActions: ["SEND_AND_CLOSE", "SUBMIT_THEN_CLOSE", "LEAVE_PENDING", "CLOSE_ONLY"],
     },
     project: {
       projectFieldId: "pf-1",
@@ -54,12 +54,18 @@ function sampleOpsTask(overrides = {}) {
       talentName: "小红",
       quote: "8000",
       clientRequirement: "要竖屏带货",
+      quoteLifecycleStatus: "NONE",
     },
     mail: {
       messageId: "m-1",
       subject: "档期确认",
       latestInboundSummary: "达人问能否改期。",
+      threadDigest: "--- folder=SENT\nplease quote\n--- [ANCHOR] folder=INBOX\n能否改期",
       proposedReply: "可以，我们改到下周。",
+      hasQuotes: false,
+      attachmentCount: 0,
+      quoteLifecycleStatus: "NONE",
+      quoteGuideOutboundCount: 1,
     },
     ...overrides,
   };

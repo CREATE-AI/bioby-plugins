@@ -2,11 +2,13 @@ import type { ConnectorCursor, PollResult } from "@regenic/domain";
 import {
   CrmApiError,
   DEFAULT_MAX_OPEN_TASKS,
+  isOpsWindowParked,
+  occupiesOpsWindow,
   type CrmClient,
   type CrmOpsTask,
   isEmailSubmitPending,
 } from "./crm-client";
-import { foldGoneIds, type HideThread } from "./list-fold";
+import { foldGoneIds, unhideReleasedIds, type HideThread } from "./list-fold";
 import { CRM_SOURCE, crmScopeOf, opsTaskThreadId } from "./locators";
 import { opsTaskRecord } from "./records";
 import {
@@ -27,6 +29,7 @@ export interface CrmOpsPollConnectorOptions {
   max_open_tasks?: number;
   now?: () => string;
   hideThread?: HideThread;
+  unhideThread?: HideThread;
 }
 
 export class CrmOpsPollConnector {
@@ -57,9 +60,19 @@ export class CrmOpsPollConnector {
       }
       throw error;
     }
-    const { live, maybeGone } = selectOpenWindow(listed, seen, this.maxOpen);
-    const disappeared = await this.confirmGone(maybeGone);
-    const folded = await foldGoneIds(disappeared, this.options.hideThread, opsTaskThreadId);
+    const { live, maybeGone } = selectOpenWindow(
+      listed,
+      seen,
+      this.maxOpen,
+      occupiesOpsWindow,
+    );
+    const { fold, release } = await this.confirmGone(maybeGone);
+    const folded = await foldGoneIds(fold, this.options.hideThread, opsTaskThreadId);
+    const released = await unhideReleasedIds(
+      release,
+      this.options.unhideThread,
+      opsTaskThreadId,
+    );
     const reconciled = reconcileRecords({
       seen,
       live: live.map((task) => {
@@ -71,7 +84,7 @@ export class CrmOpsPollConnector {
           revise: () => opsTaskRecord(task, "revise", revision),
         };
       }),
-      disappeared: folded.map((id) => ({ id })),
+      disappeared: [...folded, ...released].map((id) => ({ id })),
     });
     const nextCursor = formatSeenCursor(scope, reconciled.nextSeen);
     return toPollResult({
@@ -84,22 +97,25 @@ export class CrmOpsPollConnector {
     });
   }
 
-  private async confirmGone(ids: string[]): Promise<string[]> {
-    const gone: string[] = [];
+  private async confirmGone(ids: string[]): Promise<{ fold: string[]; release: string[] }> {
+    const fold: string[] = [];
+    const release: string[] = [];
     for (const id of ids) {
       try {
         const task = await this.client.getOpsTask(id);
         if (!isEmailSubmitPending(task)) {
-          gone.push(id);
+          fold.push(id);
+        } else if (isOpsWindowParked(task)) {
+          release.push(id);
         }
       } catch (error) {
         if (error instanceof CrmApiError && (error.status === 404 || error.status === 409)) {
-          gone.push(id);
+          fold.push(id);
           continue;
         }
         throw error;
       }
     }
-    return gone;
+    return { fold, release };
   }
 }

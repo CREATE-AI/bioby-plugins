@@ -21,7 +21,11 @@ export const ORDER_RECORD_SUFFIX = "task";
 export type CrmScope = "scoped" | "all";
 export type CrmQueue = "ops" | "order";
 
-export type OpsCompleteAction = "APPROVE_AND_CONTINUE" | "CLOSE_TASK";
+export type OpsCompleteAction =
+  | "SEND_AND_CLOSE"
+  | "SUBMIT_THEN_CLOSE"
+  | "LEAVE_PENDING"
+  | "CLOSE_ONLY";
 export type OrderReviewResult = "APPROVED" | "REJECTED";
 
 export function crmScopeOf(hasToken: boolean): CrmScope {
@@ -36,10 +40,12 @@ export function orderStreamKey(scope: CrmScope): string {
   return `crm:pending-review:${scope}`;
 }
 
+/** Inbox conversation id after kernel `threadIdOf(source, target)`. */
 export function opsTaskThreadId(taskId: string): string {
   return `${CRM_SOURCE}:${opsTaskTarget(taskId)}`;
 }
 
+/** Inbox conversation id after kernel `threadIdOf(source, target)`. */
 export function orderThreadId(projectFieldId: string): string {
   return `${CRM_SOURCE}:${orderTarget(projectFieldId)}`;
 }
@@ -55,6 +61,8 @@ export function orderTarget(projectFieldId: string): string {
 /**
  * Kernel conversationId() is `source:` + external_id before the last colon.
  * `ops_task:<id>:task` therefore groups as `crm:ops_task:<id>`.
+ * Do not put `crm:ops_task:<id>` on `record.thread.id` — ingest does threadIdOf(source, thread.id)
+ * and would store `crm:crm:ops_task:<id>`, which the inbox cannot open.
  */
 export function opsTaskExternalId(taskId: string): string {
   return `${opsTaskTarget(taskId)}:${OPS_TASK_RECORD_SUFFIX}`;
@@ -98,11 +106,27 @@ export function isOrderTarget(target: string): boolean {
 
 export function parseOpsCompleteAction(value: string): OpsCompleteAction | undefined {
   const normalized = value.trim();
-  if (normalized === "APPROVE_AND_CONTINUE" || normalized === "继续自动化") {
-    return "APPROVE_AND_CONTINUE";
+  if (normalized === "SEND_AND_CLOSE" || normalized === "发信并关单") {
+    return "SEND_AND_CLOSE";
   }
-  if (normalized === "CLOSE_TASK" || normalized === "关闭任务") {
-    return "CLOSE_TASK";
+  if (normalized === "SUBMIT_THEN_CLOSE" || normalized === "提报后关单") {
+    return "SUBMIT_THEN_CLOSE";
+  }
+  if (
+    normalized === "LEAVE_PENDING" ||
+    normalized === "留待真人" ||
+    normalized === "PENDING" ||
+    normalized === "HOLD"
+  ) {
+    return "LEAVE_PENDING";
+  }
+  if (
+    normalized === "CLOSE_ONLY" ||
+    normalized === "仅关单" ||
+    normalized === "CLOSE_TASK" ||
+    normalized === "关闭任务"
+  ) {
+    return "CLOSE_ONLY";
   }
   return undefined;
 }
@@ -135,11 +159,17 @@ export function writeBackLabels(label: string): string[] {
   if (trimmed === "APPROVED") {
     return ["APPROVED", "通过"];
   }
-  if (trimmed === "CLOSE_TASK") {
-    return ["CLOSE_TASK", "关闭任务"];
+  if (trimmed === "CLOSE_ONLY" || trimmed === "CLOSE_TASK") {
+    return ["CLOSE_ONLY", "CLOSE_TASK", "仅关单", "关闭任务"];
   }
-  if (trimmed === "APPROVE_AND_CONTINUE") {
-    return ["APPROVE_AND_CONTINUE", "继续自动化"];
+  if (trimmed === "LEAVE_PENDING") {
+    return ["LEAVE_PENDING", "留待真人", "PENDING", "HOLD"];
+  }
+  if (trimmed === "SEND_AND_CLOSE") {
+    return ["SEND_AND_CLOSE", "发信并关单"];
+  }
+  if (trimmed === "SUBMIT_THEN_CLOSE") {
+    return ["SUBMIT_THEN_CLOSE", "提报后关单"];
   }
   return trimmed ? [trimmed] : [];
 }

@@ -16,7 +16,7 @@ describe("CRM prompts", () => {
       "GET /internal/regenic/ops-tasks/task-1": jsonResponse(
         200,
         sampleOpsTask({
-          reviewGuide: { headline: "只能关", allowedActions: ["CLOSE_TASK"] },
+          reviewGuide: { headline: "只能关", allowedActions: ["CLOSE_ONLY"] },
         }),
       ),
     });
@@ -26,8 +26,45 @@ describe("CRM prompts", () => {
     );
     assert.deepEqual(
       prompts[0].questions[0].options.map((option) => option.label),
-      ["CLOSE_TASK"],
+      ["NO_FOLLOW", "NOT_OUTREACH"],
     );
+  });
+
+  it("lists scene keys only, not the four actions beside their default scene", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
+    });
+    const prompts = await listOpsPrompts(
+      new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+      "ops_task:task-1",
+    );
+    const labels = prompts[0].questions[0].options.map((option) => option.label);
+    assert.equal(labels.includes("NEED_QUOTE_GENERIC"), true);
+    assert.equal(labels.includes("QUOTE_PLUS_Q"), true);
+    assert.equal(labels.includes("REAL_HUMAN"), true);
+    assert.equal(labels.includes("SEND_AND_CLOSE"), false);
+    assert.equal(labels.includes("SUBMIT_THEN_CLOSE"), false);
+    assert.equal(labels.includes("LEAVE_PENDING"), false);
+    assert.equal(labels.includes("CLOSE_ONLY"), false);
+    const generic = prompts[0].questions[0].options.find(
+      (option) => option.label === "NEED_QUOTE_GENERIC",
+    );
+    assert.equal(generic.description, "通用要报价模板回邮后关单");
+    const format = prompts[0].questions[0].options.find(
+      (option) => option.label === "NEED_QUOTE_FORMAT",
+    );
+    assert.equal(
+      format.description,
+      "对方问报价格式：要金额+币种后关单（不是成片格式）",
+    );
+    const moreNames = prompts[0].questions[0].options.find(
+      (option) => option.label === "MORE_NAMES",
+    );
+    assert.match(moreNames.description, /不提报/);
+    const needContext = prompts[0].questions[0].options.find(
+      (option) => option.label === "NEED_CONTEXT",
+    );
+    assert.match(needContext.description, /缺平台/);
   });
 
   it("refuses to complete an ops task without a DSH conclusion", async () => {
@@ -83,7 +120,7 @@ describe("CRM prompts", () => {
       "GET /internal/regenic/ops-tasks/task-1": jsonResponse(
         200,
         sampleOpsTask({
-          reviewGuide: { allowedActions: ["CLOSE_TASK"] },
+          reviewGuide: { allowedActions: ["CLOSE_ONLY"] },
         }),
       ),
     });
@@ -94,7 +131,7 @@ describe("CRM prompts", () => {
           "ops_task:task-1",
           {
             prompt_id: "crm:ops:task-1",
-            answers: [{ id: "decision", selected: ["APPROVE_AND_CONTINUE"] }],
+            answers: [{ id: "decision", selected: ["SEND_AND_CLOSE"] }],
           },
         ),
       (error) => error instanceof ChannelDriverError,
@@ -116,20 +153,39 @@ describe("CRM prompts", () => {
       {
         prompt_id: "crm:ops:task-1",
         answers: [
-          { id: "decision", selected: ["APPROVE_AND_CONTINUE"], custom: "档期已确认" },
+          { id: "decision", selected: ["SEND_AND_CLOSE"] },
         ],
       },
     );
     assert.equal(result.accepted, true);
     assert.equal(fetch.calls[1].pathname, "/internal/regenic/ops-tasks/task-1/complete");
     const body = JSON.parse(fetch.calls[1].body);
-    assert.equal(body.action, "APPROVE_AND_CONTINUE");
+    assert.equal(body.action, "SEND_AND_CLOSE");
+    assert.equal(body.scene, undefined);
     assert.match(body.comment, /source=regenic/);
-    assert.match(body.comment, /档期已确认/);
     assert.equal(
       fetch.calls.some((call) => call.pathname.includes("/internal-review")),
       false,
     );
+  });
+
+  it("maps a scene key on the first line to the CRM action", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
+      "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(204),
+    });
+    const result = await answerOpsPrompt(
+      new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+      "ops_task:task-1",
+      {
+        prompt_id: "crm:ops:task-1",
+        answers: [{ id: "decision", selected: ["NEED_QUOTE_BRIEF"] }],
+      },
+    );
+    assert.equal(result.accepted, true);
+    const body = JSON.parse(fetch.calls.at(-1).body);
+    assert.equal(body.action, "SEND_AND_CLOSE");
+    assert.equal(body.scene, "NEED_QUOTE_BRIEF");
   });
 
   it("does not infer an order review result from narrative custom text", async () => {
@@ -189,8 +245,15 @@ describe("CRM prompts", () => {
   });
 
   it("treats a 409 complete as already settled", async () => {
+    let gets = 0;
     const fetch = createFetch({
-      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
+      "GET /internal/regenic/ops-tasks/task-1": () => {
+        gets += 1;
+        return jsonResponse(
+          200,
+          sampleOpsTask({ status: gets === 1 ? "PENDING_REVIEW" : "CLOSED" }),
+        );
+      },
       "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(409, { error: "gone" }),
     });
     const result = await answerOpsPrompt(
@@ -202,5 +265,24 @@ describe("CRM prompts", () => {
       },
     );
     assert.equal(result.accepted, true);
+  });
+
+  it("does not treat a 409 as settled when the task is still pending", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
+      "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(409, { error: "conflict" }),
+    });
+    await assert.rejects(
+      () =>
+        answerOpsPrompt(
+          new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+          "ops_task:task-1",
+          {
+            prompt_id: "crm:ops:task-1",
+            answers: [{ id: "decision", selected: ["CLOSE_TASK"] }],
+          },
+        ),
+      /409|conflict|CRM/,
+    );
   });
 });

@@ -10,6 +10,8 @@ const {
   crmHasToken,
   crmProbeCatalog,
   crmRequestTimeoutMs,
+  isOpsWindowParked,
+  occupiesOpsWindow,
   normalizeCrmBaseUrl,
 } = require("../dist");
 const { createFetch, jsonResponse, sampleOpsTask, sampleOrder } = require("./helpers.cjs");
@@ -145,7 +147,8 @@ describe("CrmClient", () => {
     });
     const client = new CrmClient({ baseUrl: "https://crm.internal", fetch });
     await client.completeOpsTask("task-1", {
-      action: "APPROVE_AND_CONTINUE",
+      action: "SEND_AND_CLOSE",
+      scene: "NEED_QUOTE_BRIEF",
       comment: "go",
     });
     await client.submitOrderInternalReview("pf-1", {
@@ -154,8 +157,28 @@ describe("CrmClient", () => {
     });
     assert.equal(fetch.calls[0].pathname, "/internal/regenic/ops-tasks/task-1/complete");
     assert.equal(fetch.calls[1].pathname, "/internal/regenic/orders/pf-1/internal-review");
-    assert.equal(JSON.parse(fetch.calls[0].body).action, "APPROVE_AND_CONTINUE");
+    assert.equal(JSON.parse(fetch.calls[0].body).action, "SEND_AND_CLOSE");
+    assert.equal(JSON.parse(fetch.calls[0].body).scene, "NEED_QUOTE_BRIEF");
     assert.equal(JSON.parse(fetch.calls[1].body).result, "APPROVED");
+  });
+
+  it("rejects complete 200 that is still pending without a parked outcome", async () => {
+    const fetch = createFetch({
+      "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(200, {
+        success: true,
+        data: sampleOpsTask(),
+      }),
+    });
+    const client = new CrmClient({ baseUrl: "https://crm.internal", fetch });
+    await assert.rejects(
+      () =>
+        client.completeOpsTask("task-1", {
+          action: "SUBMIT_THEN_CLOSE",
+          scene: "QUOTE_PLUS_Q",
+          comment: "go",
+        }),
+      (error) => error instanceof CrmApiError && error.status === 502,
+    );
   });
 
   it("parses AI review context on pending human orders", async () => {
@@ -197,7 +220,7 @@ describe("CrmClient", () => {
     assert.equal(fetch.calls[0].pathname, "/api/internal/regenic/pending-ops-tasks");
   });
 
-  it("does not invent APPROVE_AND_CONTINUE when CRM omits allowedActions", async () => {
+  it("defaults omitted allowedActions to the four ops decisions", async () => {
     const task = sampleOpsTask();
     delete task.reviewGuide.allowedActions;
     const fetch = createFetch({
@@ -205,8 +228,38 @@ describe("CrmClient", () => {
     });
     const client = new CrmClient({ baseUrl: "https://crm.internal", fetch });
     assert.deepEqual((await client.listPendingOpsTasks())[0].reviewGuide.allowedActions, [
-      "CLOSE_TASK",
+      "SEND_AND_CLOSE",
+      "SUBMIT_THEN_CLOSE",
+      "LEAVE_PENDING",
+      "CLOSE_ONLY",
     ]);
+  });
+
+  it("parses complete and lastAttempt and parks those rows", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [
+          sampleOpsTask({
+            id: "task-leave",
+            regenicComplete: { action: "LEAVE_PENDING", scene: "REAL_HUMAN" },
+          }),
+          sampleOpsTask({
+            id: "task-fail",
+            regenicLastAttempt: { action: "SUBMIT_THEN_CLOSE", error: "no quote" },
+          }),
+          sampleOpsTask({ id: "task-open" }),
+        ],
+      }),
+    });
+    const client = new CrmClient({ baseUrl: "https://crm.internal", fetch });
+    const tasks = Object.fromEntries(
+      (await client.listPendingOpsTasks()).map((task) => [task.id, task]),
+    );
+    assert.equal(tasks["task-leave"].regenicComplete.action, "LEAVE_PENDING");
+    assert.equal(tasks["task-fail"].regenicLastAttempt.error, "no quote");
+    assert.equal(isOpsWindowParked(tasks["task-leave"]), true);
+    assert.equal(isOpsWindowParked(tasks["task-fail"]), true);
+    assert.equal(occupiesOpsWindow(tasks["task-open"]), true);
   });
 
   it("keeps an explicit empty allowedActions list empty", async () => {

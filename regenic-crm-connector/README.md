@@ -9,7 +9,7 @@
 | 字段 | 必填 | 作用 |
 |---|---|---|
 | `base_url` | 是 | CRM 内网基址，须含 `/api`，例如 `https://crm-host/api` |
-| `max_open_tasks` / `max_open_order_reviews` | 否 | 同时打开上限，默认 50 |
+| `max_open_tasks` / `max_open_order_reviews` | 否 | 同时进行中的 AI 上限，默认 50。邮件提报里 `LEAVE_PENDING` / complete 400 不占坑 |
 
 ## 环境变量
 
@@ -73,7 +73,7 @@ await host.plugin(crmOrderReviewPlugin, {
 
 ## 两条队列
 
-- `crm-ops-review`：邮件提报 `PENDING_REVIEW` → DSH 结论 → `POST .../ops-tasks/{id}/complete`
+- `crm-ops-review`：工单类型 **邮件提报待审**。邮件提报 `PENDING_REVIEW` → DSH 四决策 + scene → `POST .../ops-tasks/{id}/complete`。写回约定见 [docs/ops-review-email-submit.md](docs/ops-review-email-submit.md)。
 - `crm-order-review`：AI 内审待人工 → 结论 → `POST .../orders/{id}/internal-review`
 
 禁止互相调用。连接器不发信、不提报、不单独打 change-log。无 DSH / 执行器结论时不得自行 complete。

@@ -4,9 +4,10 @@ import {
   type ConnectorCatalogProbe,
   type DriverCatalogField,
 } from "@regenic/domain";
-import type {
-  OpsCompleteAction,
-  OrderReviewResult,
+import {
+  parseOpsCompleteAction,
+  type OpsCompleteAction,
+  type OrderReviewResult,
 } from "./locators";
 
 export const CRM_BASE_URL_ENV = "REGENIC_CRM_BASE_URL";
@@ -103,11 +104,32 @@ export class CrmApiError extends Error {
   }
 }
 
+export interface CrmSubmitQuote {
+  raw: string;
+  amount?: number;
+  currency?: string;
+}
+
 export interface CrmOpsReviewGuide {
   headline?: string;
   rationale?: string;
   suggestedNext?: string;
   allowedActions: OpsCompleteAction[];
+}
+
+export interface CrmOpsRegenicComplete {
+  action?: string;
+  scene?: string;
+  at?: string;
+  sent?: boolean;
+  submitted?: boolean;
+}
+
+export interface CrmOpsRegenicLastAttempt {
+  action?: string;
+  scene?: string;
+  error?: string;
+  at?: string;
 }
 
 export interface CrmOpsTask {
@@ -118,18 +140,29 @@ export interface CrmOpsTask {
   updatedAt: string;
   reportingOperationsUserId?: string;
   reviewGuide: CrmOpsReviewGuide;
+  /** Successful complete. LEAVE_PENDING stays pending but no longer occupies the pull window. */
+  regenicComplete?: CrmOpsRegenicComplete;
+  /** Rejected complete (HTTP 400). Still pending; do not occupy a pull slot. */
+  regenicLastAttempt?: CrmOpsRegenicLastAttempt;
   project?: {
     projectFieldId?: string;
     name?: string;
     clientRequirement?: string;
     talentName?: string;
     quote?: string;
+    quoteLifecycleStatus?: string;
   };
   mail?: {
     messageId?: string;
     subject?: string;
     latestInboundSummary?: string;
+    threadDigest?: string;
     proposedReply?: string;
+    hasQuotes?: boolean;
+    quotes?: string;
+    attachmentCount?: number;
+    quoteLifecycleStatus?: string;
+    quoteGuideOutboundCount?: number;
   };
   conversationLabel?: string;
 }
@@ -257,13 +290,35 @@ export class CrmClient {
 
   async completeOpsTask(
     taskId: string,
-    input: { action: OpsCompleteAction; comment: string },
+    input: {
+      action: OpsCompleteAction;
+      scene?: string;
+      submit_quote?: CrmSubmitQuote;
+      comment: string;
+    },
   ): Promise<void> {
-    await this.request(
-      "POST",
-      `/internal/regenic/ops-tasks/${encodeURIComponent(taskId)}/complete`,
-      { action: input.action, comment: input.comment },
+    const payload = unwrapPayload(
+      await this.request(
+        "POST",
+        `/internal/regenic/ops-tasks/${encodeURIComponent(taskId)}/complete`,
+        {
+          action: input.action,
+          scene: input.scene,
+          submit_quote: input.submit_quote,
+          comment: input.comment,
+        },
+      ),
     );
+    const task = parseOpsTask(payload);
+    if (!task) {
+      return;
+    }
+    if (isEmailSubmitPending(task) && !isOpsWindowParked(task)) {
+      throw new CrmApiError(
+        502,
+        `CRM complete left ops task ${taskId} pending without a parked outcome`,
+      );
+    }
   }
 
   async listPendingHumanOrders(): Promise<CrmOrder[]> {
@@ -300,7 +355,7 @@ export class CrmClient {
   private async request(
     method: "GET" | "POST",
     path: string,
-    body?: Record<string, string>,
+    body?: Record<string, unknown>,
   ): Promise<unknown> {
     const headers: Record<string, string> = { accept: "application/json" };
     if (this.sharedSecret) {
@@ -614,7 +669,23 @@ function parseOpsTask(value: unknown): CrmOpsTask | undefined {
     project: parseProject(value.project ?? value.businessRef ?? value.order),
     mail: parseMail(value.mail ?? value.email),
     conversationLabel: stringValue(value.conversationLabel ?? value.conversation_label),
+    regenicComplete: parseRegenicComplete(value.regenicComplete ?? value.regenic_complete),
+    regenicLastAttempt: parseRegenicLastAttempt(
+      value.regenicLastAttempt ?? value.regenic_last_attempt,
+    ),
   };
+}
+
+/** AI already concluded; keep the inbox row, do not count against max_open_tasks. */
+export function isOpsWindowParked(task: CrmOpsTask): boolean {
+  if (task.regenicComplete?.action?.trim()) {
+    return true;
+  }
+  return Boolean(task.regenicLastAttempt);
+}
+
+export function occupiesOpsWindow(task: CrmOpsTask): boolean {
+  return !isOpsWindowParked(task);
 }
 
 function parseOrder(value: unknown): CrmOrder | undefined {
@@ -722,6 +793,33 @@ function parseAutoReviewLog(value: unknown): CrmOrderAutoReviewLog | undefined {
   return hasDefined(log) ? log : undefined;
 }
 
+function parseRegenicComplete(value: unknown): CrmOpsRegenicComplete | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const complete: CrmOpsRegenicComplete = {
+    action: stringValue(value.action),
+    scene: stringValue(value.scene),
+    at: stringValue(value.at),
+    sent: booleanValue(value.sent),
+    submitted: booleanValue(value.submitted),
+  };
+  return hasDefined(complete) ? complete : undefined;
+}
+
+function parseRegenicLastAttempt(value: unknown): CrmOpsRegenicLastAttempt | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const attempt: CrmOpsRegenicLastAttempt = {
+    action: stringValue(value.action),
+    scene: stringValue(value.scene),
+    error: stringValue(value.error),
+    at: stringValue(value.at),
+  };
+  return hasDefined(attempt) ? attempt : undefined;
+}
+
 function parseReviewGuide(
   value: unknown,
   fallback: OpsCompleteAction[],
@@ -738,13 +836,20 @@ function parseReviewGuide(
   };
 }
 
+const DEFAULT_OPS_ACTIONS: OpsCompleteAction[] = [
+  "SEND_AND_CLOSE",
+  "SUBMIT_THEN_CLOSE",
+  "LEAVE_PENDING",
+  "CLOSE_ONLY",
+];
+
 function parseAllowedOpsActions(value: unknown): OpsCompleteAction[] {
   if (!isObject(value)) {
-    return ["CLOSE_TASK"];
+    return [...DEFAULT_OPS_ACTIONS];
   }
   const raw = readAllowedActionsField(value);
   if (raw === undefined) {
-    return ["CLOSE_TASK"];
+    return [...DEFAULT_OPS_ACTIONS];
   }
   return parseAllowedList(raw);
 }
@@ -774,10 +879,8 @@ function parseAllowedList(raw: unknown): OpsCompleteAction[] {
           : isObject(item)
             ? stringValue(item.action ?? item.label)
             : undefined;
-      if (label === "APPROVE_AND_CONTINUE" || label === "CLOSE_TASK") {
-        return [label];
-      }
-      return [];
+      const parsed = label ? parseOpsCompleteAction(label) : undefined;
+      return parsed ? [parsed] : [];
     }),
   );
 }
@@ -795,10 +898,20 @@ function parseProject(value: unknown): CrmOpsTask["project"] {
   );
   const talentName = stringValue(value.talentName ?? value.talent_name);
   const quote = stringValue(value.quote);
-  if (!projectFieldId && !name && !clientRequirement && !talentName && !quote) {
+  const quoteLifecycleStatus = stringValue(
+    value.quoteLifecycleStatus ?? value.quote_lifecycle_status,
+  );
+  if (
+    !projectFieldId &&
+    !name &&
+    !clientRequirement &&
+    !talentName &&
+    !quote &&
+    !quoteLifecycleStatus
+  ) {
     return undefined;
   }
-  return { projectFieldId, name, clientRequirement, talentName, quote };
+  return { projectFieldId, name, clientRequirement, talentName, quote, quoteLifecycleStatus };
 }
 
 function parseMail(value: unknown): CrmOpsTask["mail"] {
@@ -810,11 +923,43 @@ function parseMail(value: unknown): CrmOpsTask["mail"] {
   const latestInboundSummary = stringValue(
     value.latestInboundSummary ?? value.latest_inbound_summary,
   );
+  const threadDigest = stringValue(value.threadDigest ?? value.thread_digest);
   const proposedReply = stringValue(value.proposedReply ?? value.proposed_reply);
-  if (!messageId && !subject && !latestInboundSummary && !proposedReply) {
+  const quotes = stringValue(value.quotes);
+  const quoteLifecycleStatus = stringValue(
+    value.quoteLifecycleStatus ?? value.quote_lifecycle_status,
+  );
+  const hasQuotes = booleanValue(value.hasQuotes ?? value.has_quotes);
+  const attachmentCount = numberValue(value.attachmentCount ?? value.attachment_count);
+  const quoteGuideOutboundCount = numberValue(
+    value.quoteGuideOutboundCount ?? value.quote_guide_outbound_count,
+  );
+  if (
+    !messageId &&
+    !subject &&
+    !latestInboundSummary &&
+    !threadDigest &&
+    !proposedReply &&
+    !quotes &&
+    !quoteLifecycleStatus &&
+    hasQuotes === undefined &&
+    attachmentCount === undefined &&
+    quoteGuideOutboundCount === undefined
+  ) {
     return undefined;
   }
-  return { messageId, subject, latestInboundSummary, proposedReply };
+  return {
+    messageId,
+    subject,
+    latestInboundSummary,
+    threadDigest,
+    proposedReply,
+    hasQuotes,
+    quotes,
+    attachmentCount,
+    quoteLifecycleStatus,
+    quoteGuideOutboundCount,
+  };
 }
 
 async function defaultFetch(
@@ -840,6 +985,14 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function scalarValue(value: unknown): string | undefined {
