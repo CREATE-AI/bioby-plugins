@@ -180,6 +180,28 @@ describe("CrmOpsPollConnector", () => {
     assert.equal(result.next_cursor.includes("task-3"), false);
   });
 
+  it("does not ingest an unseen parked task into the open window", async () => {
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+          items: [
+            sampleOpsTask({
+              id: "task-parked",
+              regenicComplete: { action: "LEAVE_PENDING", scene: "REAL_HUMAN" },
+            }),
+            sampleOpsTask({ id: "task-new" }),
+          ],
+        }),
+      },
+      { max_open_tasks: 1 },
+    );
+    const result = await connector.poll(null);
+    const ids = result.batch.records.map((record) => record.external_id);
+    assert.deepEqual(ids, ["ops_task:task-new:task"]);
+    assert.equal(result.next_cursor.includes("task-parked"), false);
+    assert.match(result.next_cursor, /"task-new"/);
+  });
+
   it("does not let LEAVE_PENDING occupy the max_open window", async () => {
     const cursor = {
       value: formatSeenCursor("all", { "task-parked": "old" }),

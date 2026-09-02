@@ -86,6 +86,9 @@ export function selectOpenWindow<T extends { id: string }>(
     if (seen[item.id] !== undefined) {
       continue;
     }
+    if (!occupies(item)) {
+      continue;
+    }
     if (newcomers.length >= room) {
       break;
     }

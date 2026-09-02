@@ -238,7 +238,7 @@ POST /internal/regenic/ops-tasks/{taskId}/complete
 - 操作者 / 审核人 = `regenic`（与是否带 JWT 无关）。
 - 有 token 不能完工别人提报运营的任务 → `404`。
 - 任务不是邮件提报或已不在 `PENDING_REVIEW` → `404` / `409`；连接器对账折进「不显示」。
-- 校验失败、外发失败、提报失败 → `400` / `409`，**保持待审**，不得半关单。发信已成功但关单失败须可补偿关，禁止重复外发（幂等键：`taskId + action + scene + 锚点邮件 id`）。
+- 校验失败、外发失败、提报失败 → `400` / `409`，**保持待审**，不得半关单。任务仍是 `PENDING_REVIEW` 时一律写 `regenicLastAttempt`（含业务 409），让出 `max_open_tasks`。只有已不在待审的 409 不写。发信已成功但关单失败须可补偿关，禁止重复外发（幂等键：`taskId + action + scene + 锚点邮件 id`）。
 - 旧 body `{ action: "APPROVE_AND_CONTINUE" }` → `400`，提示改用四值。
 - `LEAVE_PENDING` 成功：HTTP 2xx，任务仍 `PENDING_REVIEW`。
 
@@ -262,7 +262,7 @@ GET /internal/regenic/ops-tasks/{taskId}
 | `POST complete` 原样传递 | 把四值折回 `approve`/`close` |
 | 离开待审后折进「不显示」（与订单 AI 内审相同；不 tombstone） | 调订单 `internal-review` |
 
-`LEAVE_PENDING` 成功后任务仍 `PENDING_REVIEW`，但 **不再进入 pending-ops-tasks 拉取列表**。桌面工单留在「显示」并进入 **需关注**（写回 recipe 完工不再被内核折进 Hidden）。complete 400 写 `regenicLastAttempt`，同样退出拉取、进需关注。已关单才折进「不显示」。
+`LEAVE_PENDING` 成功后任务仍 `PENDING_REVIEW`，但 **不再进入 pending-ops-tasks 拉取列表**。桌面工单留在「显示」并进入 **需关注**（写回 recipe 完工不再被内核折进 Hidden）。complete 失败且仍待审时写 `regenicLastAttempt`（400 / 仍待审的 409 / 500），同样退出拉取、进需关注。已关单才折进「不显示」。
 
 ---
 
