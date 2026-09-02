@@ -128,7 +128,7 @@ Scene 是话术键，不是第二种写回枚举。DSH 读信后选出 scene；C
 | `REJECT_OUR_NUMBER` | `SEND_AND_CLOSE` | true | false |
 | `ASK_STATUS_IN_REVIEW` | `SEND_AND_CLOSE` | true | false |
 | `NEED_CONTEXT` | `SEND_AND_CLOSE` | true | false |
-| `MORE_NAMES` | `SEND_AND_CLOSE` 或 `SUBMIT_THEN_CLOSE` | true | 有本线程价则为 true |
+| `MORE_NAMES` | `SEND_AND_CLOSE` | true | false |
 | `QUOTE_PLUS_Q` | `SUBMIT_THEN_CLOSE` | true | true |
 | `QUOTE_UNPARSED_RANGE` | `SUBMIT_THEN_CLOSE` | true | true |
 | `REAL_HUMAN` | `LEAVE_PENDING` | **false** | false |
@@ -136,6 +136,15 @@ Scene 是话术键，不是第二种写回枚举。DSH 读信后选出 scene；C
 | `NOT_OUTREACH` | `CLOSE_ONLY` | false | false |
 
 `QUOTE_UNPARSED_BODY` / `QUOTE_UNPARSED_MULTI` / 自称已报价核不出 → 走 `REAL_HUMAN` + `LEAVE_PENDING`，不要配成可自动发。
+
+话术口径（内置英文稿）：
+
+- `NEED_QUOTE_BRIEF`：挡 brief，先要价，不发合作细节。
+- `NEED_QUOTE_FORMAT`：要「金额 + 币种」，不是成片/投放格式。
+- `NEED_CONTEXT`：询问缺的平台/条数，并仍要价。
+- `MORE_NAMES`：致谢额外名单，不声称已提报；本线程已有报价应改 `QUOTE_PLUS_Q`。
+- `ASK_STATUS_IN_REVIEW`：仅已提报可用；未提报不要选。
+- `{platform}` 为空时 CRM 渲染成 `this collaboration`，避免 `rate for  so`。
 
 ### 6.2 决策 × scene 校验（CRM，不一致 `400`）
 

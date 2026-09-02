@@ -50,6 +50,21 @@ describe("CRM prompts", () => {
       (option) => option.label === "NEED_QUOTE_GENERIC",
     );
     assert.equal(generic.description, "通用要报价模板回邮后关单");
+    const format = prompts[0].questions[0].options.find(
+      (option) => option.label === "NEED_QUOTE_FORMAT",
+    );
+    assert.equal(
+      format.description,
+      "对方问报价格式：要金额+币种后关单（不是成片格式）",
+    );
+    const moreNames = prompts[0].questions[0].options.find(
+      (option) => option.label === "MORE_NAMES",
+    );
+    assert.match(moreNames.description, /不提报/);
+    const needContext = prompts[0].questions[0].options.find(
+      (option) => option.label === "NEED_CONTEXT",
+    );
+    assert.match(needContext.description, /缺平台/);
   });
 
   it("refuses to complete an ops task without a DSH conclusion", async () => {

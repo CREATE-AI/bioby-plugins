@@ -67,9 +67,9 @@ function sceneDescription(scene: string): string {
     case "NEED_QUOTE_GENERIC":
       return "通用要报价模板回邮后关单";
     case "NEED_QUOTE_BRIEF":
-      return "要 brief / 合作细节后关单";
+      return "对方要 brief/细节：先挡合作细节再要价后关单（不发 brief）";
     case "NEED_QUOTE_FORMAT":
-      return "要报价格式（数字+币种）后关单";
+      return "对方问报价格式：要金额+币种后关单（不是成片格式）";
     case "NEED_QUOTE_BUDGET_ASK":
       return "对方问预算，用要报价模板回后关单";
     case "NEED_QUOTE_WHATSAPP":
@@ -89,11 +89,11 @@ function sceneDescription(scene: string): string {
     case "REJECT_OUR_NUMBER":
       return "拒绝对方要我方出价，回模板后关单";
     case "ASK_STATUS_IN_REVIEW":
-      return "已提报，回「审核中」模板后关单";
+      return "仅已提报时回「审核中」后关单；未提报应改 QUOTE_PLUS_Q 或 REAL_HUMAN";
     case "NEED_CONTEXT":
-      return "缺上下文，回询问模板后关单";
+      return "来信缺平台/条数等上下文，询问后仍要价关单";
     case "MORE_NAMES":
-      return "只要更多达人名单，回邮后关单（本线程已有报价应改 QUOTE_PLUS_Q）";
+      return "对方给了更多达人名单，致谢后关单（不提报；本线程已有报价应改 QUOTE_PLUS_Q）";
     case "QUOTE_PLUS_Q":
       return "按本线程报价提报，可选收悉回邮后关单";
     case "QUOTE_UNPARSED_RANGE":
