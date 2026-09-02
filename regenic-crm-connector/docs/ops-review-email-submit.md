@@ -238,7 +238,7 @@ POST /internal/regenic/ops-tasks/{taskId}/complete
 - 操作者 / 审核人 = `regenic`（与是否带 JWT 无关）。
 - 有 token 不能完工别人提报运营的任务 → `404`。
 - 任务不是邮件提报或已不在 `PENDING_REVIEW` → `404` / `409`；连接器对账折进「不显示」。
-- 校验失败、外发失败、提报失败 → `400` / `409`，**保持待审**，不得半关单。任务仍是 `PENDING_REVIEW` 时一律写 `regenicLastAttempt`（含业务 409），让出 `max_open_tasks`。只有已不在待审的 409 不写。发信已成功但关单失败须可补偿关，禁止重复外发（幂等键：`taskId + action + scene + 锚点邮件 id`）。
+- `SUBMIT_THEN_CLOSE` 撞上提报硬门槛（无报价、地区不符、已提报、30 天去重、平台冷却等 400/409）→ 写 `regenicLastAttempt`，**关单**，HTTP 2xx。不发收悉信。`SEND_AND_CLOSE` 校验/外发失败仍保持待审并写 `regenicLastAttempt`。已不在待审的 409 不写。发信已成功但关单失败须可补偿关，禁止重复外发（幂等键：`taskId + action + scene + 锚点邮件 id`）。
 - 旧 body `{ action: "APPROVE_AND_CONTINUE" }` → `400`，提示改用四值。
 - `LEAVE_PENDING` 成功：HTTP 2xx，任务仍 `PENDING_REVIEW`。
 

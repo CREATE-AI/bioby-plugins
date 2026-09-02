@@ -217,7 +217,7 @@ POST /internal/regenic/ops-tasks/{taskId}/complete
 - 有 token 时不能完工别人提报运营的任务（`404`）
 - 任务已不在 `PENDING_REVIEW` 且不是本轮刚关单 → `409`，连接器对账折进「不显示」
 - complete 成功必须回任务快照：关单动作的 `status` 不再是待审；`LEAVE_PENDING` 必须带 `regenicComplete`。空 204 仅兼容旧环境
-- 同一 action 可幂等续跑（关单没落盘则再 close，已提报不再提一次）。400/500 写 `regenicLastAttempt`
+- 同一 action 可幂等续跑（关单没落盘则再 close，已提报不再提一次）。`SUBMIT_THEN_CLOSE` 业务拒绝后关单并 2xx；其它 400/500 写 `regenicLastAttempt` 并保持待审
 - **禁止**再把 `complete` 折成现网 `approve`（邮件提报待审不会接着跑）
 - 发哪封信由 CRM scene 配置决定，连接器只传 scene 键，不传正文、不选模板
 
