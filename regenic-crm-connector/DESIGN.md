@@ -34,10 +34,10 @@
 1. 私有插件，内部构建挂上，公开默认不装。
 2. **P0 主拉取：`taskType=EMAIL_SUBMIT_AUTOMATION` 且状态 = `PENDING_REVIEW` 的运营任务**（及同形态的邮件提报待审）。有 token 只拉 **提报运营 = 该账号** 的任务；无 token 拉全部。
 3. **P0 固定链路（不可改成人工主路径）：** ingest → 开工单（任务类型 **邮件提报待审**）→ **DSH 判断** → 连接器按结论自动 `complete`。CRM 按四决策执行（详见专项文档）：
-   - `SEND_AND_CLOSE` → scene 模板回邮 → 关单
-   - `SUBMIT_THEN_CLOSE` → 提报 → 可选收悉回邮 → 关单
-   - `CLOSE_ONLY` → 不发信，关单
-   - `LEAVE_PENDING` → 不发信、不关单
+   - `SEND_AND_CLOSE` → scene 模板回邮成功 → 关单 + 锚点标星
+   - `SUBMIT_THEN_CLOSE` → 尝试提报 → 可选收悉（仅成功）→ 关单 + 锚点标星（提报成败都关）
+   - `CLOSE_ONLY` → 不发信，关单 + 锚点标星
+   - `LEAVE_PENDING` → 不发信、不关单、不标星
    DSH 只出结论，不调 CRM、不发信。连接器只传递结论，不代替 DSH 判断，不直接发信/提报。
 4. 操作人记为 `regenic`（与是否带 token 无关）。token 只限制读/写范围。
 5. 一条运营任务 = 一条线程，线程上只有一条 `task`。关联订单、邮件是上下文，不是第二张工单。
@@ -217,7 +217,7 @@ POST /internal/regenic/ops-tasks/{taskId}/complete
 - 有 token 时不能完工别人提报运营的任务（`404`）
 - 任务已不在 `PENDING_REVIEW` 且不是本轮刚关单 → `409`，连接器对账折进「不显示」
 - complete 成功必须回任务快照：关单动作的 `status` 不再是待审；`LEAVE_PENDING` 必须带 `regenicComplete`。空 204 仅兼容旧环境
-- 同一 action 可幂等续跑（关单没落盘则再 close，已提报不再提一次）。`SUBMIT_THEN_CLOSE` 业务拒绝后关单并 2xx；其它 400/500 写 `regenicLastAttempt` 并保持待审
+- 同一 action 可幂等续跑（关单没落盘则再 close，已提报不再提一次）。`SUBMIT_THEN_CLOSE` 业务拒绝后关单+标星并 2xx；`SEND_AND_CLOSE` 发信失败及其它 500 / 未知 scene 写 `regenicLastAttempt` 并保持待审
 - **禁止**再把 `complete` 折成现网 `approve`（邮件提报待审不会接着跑）
 - 发哪封信由 CRM scene 配置决定，连接器只传 scene 键，不传正文、不选模板
 

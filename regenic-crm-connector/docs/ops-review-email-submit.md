@@ -82,10 +82,10 @@ Recipe 只 match：`source=crm`、`record_class=task`、`thread_facet=ticket`、
 
 | action | 中文（Prompt / 审计） | CRM 必须做的事 | 关运营任务？ |
 |---|---|---|---|
-| `SEND_AND_CLOSE` | 发信并关单 | 用 **scene 配置的模板** 回锚点邮件；成功后关单 | 是 |
-| `SUBMIT_THEN_CLOSE` | 提报后关单 | 按 `submit_quote` 走现网提报；若该 scene 有收悉稿则回一封；成功后关单 | 是 |
-| `LEAVE_PENDING` | 留待真人 | **不发信、不提报、不关单**；写审计 | 否 |
-| `CLOSE_ONLY` | 仅关单 | **不发信、不提报**；直接关单 | 是 |
+| `SEND_AND_CLOSE` | 发信并关单 | 用 **scene 配置的模板** 回锚点邮件；成功后关单并给锚点标星 | 是（发信失败则否） |
+| `SUBMIT_THEN_CLOSE` | 提报后关单 | 按 `submit_quote` 走现网提报；成功则可选收悉；**提报成败都关单**并标星 | 是 |
+| `LEAVE_PENDING` | 留待真人 | **不发信、不提报、不关单、不标星**；写审计 | 否 |
+| `CLOSE_ONLY` | 仅关单 | **不发信、不提报**；关单并给锚点标星 | 是 |
 
 「自动回邮然后关闭运营任务」只覆盖 `SEND_AND_CLOSE` 与 `SUBMIT_THEN_CLOSE`（后者在有收悉稿时）。`CLOSE_ONLY` 不回邮。`LEAVE_PENDING` 必须留下给真人（附件读不出、价核不出、免费也愿意做、三轮仍要细节等）。
 
@@ -158,10 +158,10 @@ CRM  EMAIL_SUBMIT_AUTOMATION + PENDING_REVIEW（邮件提报待审）
   → Recipe（DSH）读 body：选 action + scene + 可选 submit_quote
   → 连接器 POST complete（操作者 regenic）
   → CRM：
-       SEND_AND_CLOSE     → 渲染 scene 模板 → 回邮 → CLOSED
-       SUBMIT_THEN_CLOSE  → 提报 → 可选收悉回邮 → CLOSED
-       CLOSE_ONLY         → CLOSED
-       LEAVE_PENDING      → 仍 PENDING_REVIEW，写审计
+       SEND_AND_CLOSE     → 渲染 scene 模板 → 回邮成功 → CLOSED + 锚点标星
+       SUBMIT_THEN_CLOSE  → 尝试提报 → 可选收悉（仅提报成功）→ CLOSED + 锚点标星
+       CLOSE_ONLY         → CLOSED + 锚点标星
+       LEAVE_PENDING      → 仍 PENDING_REVIEW，写审计，不标星
   → 已关闭：对账折进「不显示」（conversation_prefs.hidden），不 tombstone
   → 留待审：仍在 live[] 与「显示」栏，本 event 不重跑；CRM 内容 revise 才再判
 ```
@@ -238,7 +238,7 @@ POST /internal/regenic/ops-tasks/{taskId}/complete
 - 操作者 / 审核人 = `regenic`（与是否带 JWT 无关）。
 - 有 token 不能完工别人提报运营的任务 → `404`。
 - 任务不是邮件提报或已不在 `PENDING_REVIEW` → `404` / `409`；连接器对账折进「不显示」。
-- `SUBMIT_THEN_CLOSE` 撞上提报硬门槛（无报价、地区不符、已提报、30 天去重、平台冷却等 400/409）→ 写 `regenicLastAttempt`，**关单**，HTTP 2xx。不发收悉信。`SEND_AND_CLOSE` 校验/外发失败仍保持待审并写 `regenicLastAttempt`。已不在待审的 409 不写。发信已成功但关单失败须可补偿关，禁止重复外发（幂等键：`taskId + action + scene + 锚点邮件 id`）。
+- `SUBMIT_THEN_CLOSE` 撞上提报硬门槛（无报价、地区不符、已提报、30 天去重、平台冷却等 400/409/9xxx）→ 写 `regenicLastAttempt`，**关单并给锚点标星**，HTTP 2xx。不发收悉信。`CLOSE_ONLY` 与发信成功的 `SEND_AND_CLOSE` 同样关单+标星（已标则跳过；标星失败不挡关单）。`SEND_AND_CLOSE` 校验/外发失败仍保持待审并写 `regenicLastAttempt`，不标星。已不在待审的 409 不写。发信已成功但关单失败须可补偿关，禁止重复外发（幂等键：`taskId + action + scene + 锚点邮件 id`）。500 / 未知 scene 不关。
 - 旧 body `{ action: "APPROVE_AND_CONTINUE" }` → `400`，提示改用四值。
 - `LEAVE_PENDING` 成功：HTTP 2xx，任务仍 `PENDING_REVIEW`。
 
@@ -312,11 +312,11 @@ live[]     = occupying + parked + 本轮 newcomers
 
 1. inbox 一行 = 一条邮件提报待审；`unit_kind` 人读为「邮件提报待审」。
 2. DSH 出 `SEND_AND_CLOSE` + 合法 scene：无人点击，CRM 发出与配置一致的回邮，任务 `CLOSED`，inbox 对账消失。
-3. DSH 出 `SUBMIT_THEN_CLOSE` + `submit_quote`：CRM 提报成功（可选收悉信），任务 `CLOSED`。
-4. DSH 出 `CLOSE_ONLY`：不发信，任务 `CLOSED`。
-5. DSH 出 `LEAVE_PENDING`：不发信、不关单；CRM 仍待审；本 event 不重跑。
-6. `SEND_AND_CLOSE` + `REAL_HUMAN`（`allowAutoSend=false`）→ `400`，任务仍待审。
-7. `SUBMIT_THEN_CLOSE` 无 `submit_quote` → `400`，未提报。
+3. DSH 出 `SUBMIT_THEN_CLOSE` + `submit_quote`：无论提报成败，任务 `CLOSED`，锚点已标星；仅提报成功才发收悉信。
+4. DSH 出 `CLOSE_ONLY`：不发信，任务 `CLOSED`，锚点已标星。
+5. DSH 出 `LEAVE_PENDING`：不发信、不关单、不标星；CRM 仍待审；本 event 不重跑。
+6. `SEND_AND_CLOSE` + `REAL_HUMAN`（`allowAutoSend=false`）→ `400`，任务仍待审，未标星。
+7. `SUBMIT_THEN_CLOSE` 无报价（无 `submit_quote` 且 inbox 未解析到价）→ `lastAttempt` + `CLOSED` + 标星（邮件找不到则跳过标星），未提报。
 8. 旧 `APPROVE_AND_CONTINUE` → `400`，任务仍待审，扫描器未重跑 Agent。
 9. 无 DSH 合法结论：连接器不 complete。
 10. 同一执行器不得改任何订单内审。
@@ -329,7 +329,7 @@ live[]     = occupying + parked + 本轮 newcomers
 1. 工单任务类型 = **邮件提报待审**；CRM 对象 = 邮件提报 `PENDING_REVIEW`。
 2. 写回只认四值：`SEND_AND_CLOSE` / `SUBMIT_THEN_CLOSE` / `LEAVE_PENDING` / `CLOSE_ONLY`。
 3. 决策定发信、提报、关单；scene 只选题，配置在 CRM。
-4. 成功路径关单，不 `approve` 回 `IN_PROGRESS`。
+4. 关单类决策关运营任务并给锚点标星，不 `approve` 回 `IN_PROGRESS`。`LEAVE_PENDING` 与发信失败除外。
 5. 连接器不发信、不提报；DSH 不调 CRM。
 6. 主路径仍是自动 complete，不是人工点选。
 7. 与订单内审队列继续解耦。

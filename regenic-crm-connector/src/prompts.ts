@@ -54,11 +54,11 @@ function actionDescription(action: OpsCompleteAction): string {
     case "SEND_AND_CLOSE":
       return "用 CRM scene 模板回邮后关单";
     case "SUBMIT_THEN_CLOSE":
-      return "按 submit_quote 提报，可选收悉回邮后关单";
+      return "按 submit_quote 提报，成败都关单并标星；成功则可收悉";
     case "LEAVE_PENDING":
       return "不发信、不关单，留待真人";
     case "CLOSE_ONLY":
-      return "不发信，直接关单";
+      return "不发信，关单并标星";
   }
 }
 
