@@ -244,7 +244,7 @@ describe("CRM prompts", () => {
     );
   });
 
-  it("treats a 409 complete as already settled", async () => {
+  it("treats a 409 complete as write failure but still releases the slot", async () => {
     let gets = 0;
     const fetch = createFetch({
       "GET /internal/regenic/ops-tasks/task-1": () => {
@@ -256,6 +256,7 @@ describe("CRM prompts", () => {
       },
       "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(409, { error: "gone" }),
     });
+    const released = [];
     const result = await answerOpsPrompt(
       new CrmClient({ baseUrl: "https://crm.internal", fetch }),
       "ops_task:task-1",
@@ -263,26 +264,28 @@ describe("CRM prompts", () => {
         prompt_id: "crm:ops:task-1",
         answers: [{ id: "decision", selected: ["CLOSE_TASK"] }],
       },
+      (taskId) => released.push(taskId),
     );
-    assert.equal(result.accepted, true);
+    assert.equal(result.accepted, false);
+    assert.deepEqual(released, ["task-1"]);
   });
 
-  it("does not treat a 409 as settled when the task is still pending", async () => {
+  it("releases the slot even when CRM returns 409 while still pending", async () => {
     const fetch = createFetch({
       "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
       "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(409, { error: "conflict" }),
     });
-    await assert.rejects(
-      () =>
-        answerOpsPrompt(
-          new CrmClient({ baseUrl: "https://crm.internal", fetch }),
-          "ops_task:task-1",
-          {
-            prompt_id: "crm:ops:task-1",
-            answers: [{ id: "decision", selected: ["CLOSE_TASK"] }],
-          },
-        ),
-      /409|conflict|CRM/,
+    const released = [];
+    const result = await answerOpsPrompt(
+      new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+      "ops_task:task-1",
+      {
+        prompt_id: "crm:ops:task-1",
+        answers: [{ id: "decision", selected: ["CLOSE_TASK"] }],
+      },
+      (taskId) => released.push(taskId),
     );
+    assert.equal(result.accepted, false);
+    assert.deepEqual(released, ["task-1"]);
   });
 });

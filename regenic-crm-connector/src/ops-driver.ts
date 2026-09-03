@@ -39,6 +39,11 @@ import { answerOpsPrompt, listOpsPrompts } from "./prompts";
 import { crmOpsReviewPlugin } from "./plugin";
 import { opsConversationLabel } from "./records";
 import { createCrmOpsSyncSource } from "./sync-source";
+import {
+  OpenWindowLedger,
+  bindOpsOpenWindowLedger,
+  releaseOpsOpenWindow,
+} from "./open-window";
 
 export const crmOpsReviewDriver: ChannelDriver = {
   connector_type: OPS_CONNECTOR_TYPE,
@@ -202,6 +207,7 @@ export const crmOpsReviewDriver: ChannelDriver = {
         }),
         thread.target,
         answer,
+        (taskId) => releaseOpsOpenWindow(installation.id, taskId),
       );
     } catch (error) {
       mapCrmError(error, "send");
@@ -231,6 +237,8 @@ export async function mountOpsStream(
   const scope = crmScopeOf(crmHasToken(env, installation.credentials_ref));
   const streamKey = opsStreamKey(scope);
   if (!host.get("connectors").getStream(installation.id, streamKey)) {
+    const openWindowLedger = new OpenWindowLedger();
+    bindOpsOpenWindowLedger(installation.id, openWindowLedger);
     await host.plugin(crmOpsReviewPlugin, {
       installation_id: installation.id,
       org_id: installation.org_id,
@@ -240,6 +248,7 @@ export async function mountOpsStream(
       env,
       fetch: extras.fetch,
       now: extras.now,
+      openWindowLedger,
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);

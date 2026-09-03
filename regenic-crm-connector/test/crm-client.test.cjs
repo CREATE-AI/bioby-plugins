@@ -162,7 +162,7 @@ describe("CrmClient", () => {
     assert.equal(JSON.parse(fetch.calls[1].body).result, "APPROVED");
   });
 
-  it("rejects complete 200 that is still pending without a parked outcome", async () => {
+  it("ignores complete responses that are still pending without a parked outcome", async () => {
     const fetch = createFetch({
       "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(200, {
         success: true,
@@ -170,14 +170,13 @@ describe("CrmClient", () => {
       }),
     });
     const client = new CrmClient({ baseUrl: "https://crm.internal", fetch });
-    await assert.rejects(
-      () =>
-        client.completeOpsTask("task-1", {
-          action: "SUBMIT_THEN_CLOSE",
-          scene: "QUOTE_PLUS_Q",
-          comment: "go",
-        }),
-      (error) => error instanceof CrmApiError && error.status === 502,
+    assert.equal(
+      await client.completeOpsTask("task-1", {
+        action: "SUBMIT_THEN_CLOSE",
+        scene: "QUOTE_PLUS_Q",
+        comment: "go",
+      }),
+      true,
     );
   });
 

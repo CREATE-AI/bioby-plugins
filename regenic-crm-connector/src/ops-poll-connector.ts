@@ -8,6 +8,7 @@ import {
   isEmailSubmitPending,
 } from "./crm-client";
 import { foldGoneIds, type HideThread } from "./list-fold";
+import { OpenWindowLedger, uniqueIds } from "./open-window";
 import { CRM_SOURCE, crmScopeOf, opsTaskThreadId } from "./locators";
 import { opsTaskRecord } from "./records";
 import {
@@ -28,6 +29,7 @@ export interface CrmOpsPollConnectorOptions {
   max_open_tasks?: number;
   now?: () => string;
   hideThread?: HideThread;
+  openWindowLedger?: OpenWindowLedger;
 }
 
 export class CrmOpsPollConnector {
@@ -58,14 +60,20 @@ export class CrmOpsPollConnector {
       }
       throw error;
     }
-    const { live, maybeGone } = selectOpenWindow(
+    const { live, maybeGone, releaseFromSeen } = selectOpenWindow(
       listed,
       seen,
       this.maxOpen,
       occupiesOpsWindow,
+      this.options.openWindowLedger?.peek(),
     );
-    const fold = await this.confirmGone(maybeGone);
-    const folded = await foldGoneIds(fold, this.options.hideThread, opsTaskThreadId);
+    const dropFromSeen = uniqueIds([
+      ...releaseFromSeen,
+      ...(this.options.openWindowLedger?.drain() ?? []),
+    ]);
+    const confirmedGone = await this.confirmGone(maybeGone);
+    const toFold = uniqueIds([...confirmedGone, ...dropFromSeen]);
+    await foldGoneIds(toFold, this.options.hideThread, opsTaskThreadId);
     const reconciled = reconcileRecords({
       seen,
       live: live.map((task) => {
@@ -77,7 +85,7 @@ export class CrmOpsPollConnector {
           revise: () => opsTaskRecord(task, "revise", revision),
         };
       }),
-      disappeared: folded.map((id) => ({ id })),
+      disappeared: uniqueIds([...confirmedGone, ...dropFromSeen]).map((id) => ({ id })),
     });
     const nextCursor = formatSeenCursor(scope, reconciled.nextSeen);
     return toPollResult({

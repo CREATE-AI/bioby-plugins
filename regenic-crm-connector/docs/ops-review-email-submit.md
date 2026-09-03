@@ -202,7 +202,7 @@ REAL_HUMAN
 NO_FOLLOW
 ```
 
-连接器仍能解析四决策（测试 / 旧结论）；但工单选项里不展示，避免和默认 scene 重复。缺 scene 的 complete 仍由 CRM 默认（要价 `NEED_QUOTE_GENERIC`，提报 `QUOTE_PLUS_Q`）。提报价优先用连接器 `submit_quote`，没有则从锚点邮件已解析报价取最高价。
+连接器仍能解析四决策（测试 / 旧结论）；但工单选项里不展示，避免和默认 scene 重复。缺 scene 的 complete 仍由 CRM 默认（要价 `NEED_QUOTE_GENERIC`，提报 `QUOTE_PLUS_Q`）。提报价优先用连接器 `submit_quote`；没有则走与邮件提报相同的 `EmailBoundInfluencerQuoteSelector`（绑定平台符合档取最低价）。区间原文（`QUOTE_UNPARSED_RANGE` / raw 含上下限）仍按最高价。
 
 | action | 别名（仅解析） |
 |---|---|

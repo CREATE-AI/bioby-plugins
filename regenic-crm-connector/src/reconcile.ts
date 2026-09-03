@@ -63,18 +63,24 @@ export function selectOpenWindow<T extends { id: string }>(
   seen: Record<string, string>,
   maxOpen: number,
   occupies: (item: T) => boolean = () => true,
-): { live: T[]; maybeGone: string[] } {
+  skipOccupying: ReadonlySet<string> = new Set(),
+): { live: T[]; maybeGone: string[]; releaseFromSeen: string[] } {
   const listedById = new Map<string, T>();
   for (const item of listed) {
     listedById.set(item.id, item);
   }
   const maybeGone: string[] = [];
+  const releaseFromSeen: string[] = [];
   const occupyingItems: T[] = [];
   for (const id of Object.keys(seen)) {
     const item = listedById.get(id);
     if (item) {
-      if (occupies(item)) {
+      if (skipOccupying.has(id)) {
+        releaseFromSeen.push(id);
+      } else if (occupies(item)) {
         occupyingItems.push(item);
+      } else {
+        releaseFromSeen.push(id);
       }
     } else {
       maybeGone.push(id);
@@ -94,7 +100,7 @@ export function selectOpenWindow<T extends { id: string }>(
     }
     newcomers.push(item);
   }
-  return { live: [...occupyingItems, ...newcomers], maybeGone };
+  return { live: [...occupyingItems, ...newcomers], maybeGone, releaseFromSeen };
 }
 
 export function reconcileRecords(input: {

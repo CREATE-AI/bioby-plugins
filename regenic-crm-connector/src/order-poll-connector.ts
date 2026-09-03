@@ -7,6 +7,7 @@ import {
   isPendingHumanOrder,
 } from "./crm-client";
 import { foldGoneIds, type HideThread } from "./list-fold";
+import { OpenWindowLedger, uniqueIds } from "./open-window";
 import { CRM_SOURCE, crmScopeOf, orderThreadId } from "./locators";
 import { orderRecord } from "./records";
 import {
@@ -24,6 +25,7 @@ export interface CrmOrderPollConnectorOptions {
   max_open_order_reviews?: number;
   now?: () => string;
   hideThread?: HideThread;
+  openWindowLedger?: OpenWindowLedger;
 }
 
 export class CrmOrderPollConnector {
@@ -46,9 +48,20 @@ export class CrmOrderPollConnector {
     const scope = crmScopeOf(this.client.hasToken);
     const seen = parseSeenCursor(cursor, scope);
     const listed = await this.client.listPendingHumanOrders();
-    const { live, maybeGone } = selectOpenWindow(listed, seen, this.maxOpen);
-    const disappeared = await this.confirmGone(maybeGone);
-    const folded = await foldGoneIds(disappeared, this.options.hideThread, orderThreadId);
+    const { live, maybeGone, releaseFromSeen } = selectOpenWindow(
+      listed,
+      seen,
+      this.maxOpen,
+      undefined,
+      this.options.openWindowLedger?.peek(),
+    );
+    const dropFromSeen = uniqueIds([
+      ...releaseFromSeen,
+      ...(this.options.openWindowLedger?.drain() ?? []),
+    ]);
+    const confirmedGone = await this.confirmGone(maybeGone);
+    const toFold = uniqueIds([...confirmedGone, ...dropFromSeen]);
+    await foldGoneIds(toFold, this.options.hideThread, orderThreadId);
     const reconciled = reconcileRecords({
       seen,
       live: live.map((order) => {
@@ -60,7 +73,7 @@ export class CrmOrderPollConnector {
           revise: () => orderRecord(order, "revise", revision),
         };
       }),
-      disappeared: folded.map((id) => ({ id })),
+      disappeared: uniqueIds([...confirmedGone, ...dropFromSeen]).map((id) => ({ id })),
     });
     const nextCursor = formatSeenCursor(scope, reconciled.nextSeen);
     return toPollResult({

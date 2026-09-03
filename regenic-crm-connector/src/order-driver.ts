@@ -39,6 +39,11 @@ import { crmOrderReviewPlugin } from "./plugin";
 import { answerOrderPrompt, listOrderPrompts } from "./prompts";
 import { orderConversationLabel } from "./records";
 import { createCrmOrderSyncSource } from "./sync-source";
+import {
+  OpenWindowLedger,
+  bindOrderOpenWindowLedger,
+  releaseOrderOpenWindow,
+} from "./open-window";
 
 export const crmOrderReviewDriver: ChannelDriver = {
   connector_type: ORDER_CONNECTOR_TYPE,
@@ -204,6 +209,7 @@ export const crmOrderReviewDriver: ChannelDriver = {
         }),
         thread.target,
         answer,
+        (orderId) => releaseOrderOpenWindow(installation.id, orderId),
       );
     } catch (error) {
       mapCrmError(error, "send");
@@ -237,6 +243,8 @@ export async function mountOrderStream(
   const scope = crmScopeOf(crmHasToken(env, installation.credentials_ref));
   const streamKey = orderStreamKey(scope);
   if (!host.get("connectors").getStream(installation.id, streamKey)) {
+    const openWindowLedger = new OpenWindowLedger();
+    bindOrderOpenWindowLedger(installation.id, openWindowLedger);
     await host.plugin(crmOrderReviewPlugin, {
       installation_id: installation.id,
       org_id: installation.org_id,
@@ -246,6 +254,7 @@ export async function mountOrderStream(
       env,
       fetch: extras.fetch,
       now: extras.now,
+      openWindowLedger,
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);

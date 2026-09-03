@@ -4,6 +4,7 @@ const { conversationId, verifyPollConnectorConformance } = require("@regenic/dom
 const {
   CrmClient,
   CrmOpsPollConnector,
+  OpenWindowLedger,
   formatSeenCursor,
 } = require("../dist");
 const { createFetch, jsonResponse, sampleOpsTask, surfaceOf } = require("./helpers.cjs");
@@ -115,7 +116,7 @@ describe("CrmOpsPollConnector", () => {
     assert.equal(result.next_cursor.includes("task-1"), false);
   });
 
-  it("keeps a gone task in seen when fold write fails transiently", async () => {
+  it("keeps revising active tasks when fold write fails but still drops gone ids from seen", async () => {
     const first = createConnector({
       "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
         items: [sampleOpsTask(), sampleOpsTask({ id: "task-2" })],
@@ -140,7 +141,8 @@ describe("CrmOpsPollConnector", () => {
       result.batch.records.map((record) => [record.external_id, record.operation]),
     );
     assert.equal(operations["ops_task:task-1:task"], "revise");
-    assert.match(result.next_cursor, /"task-2"/);
+    assert.match(result.next_cursor, /"task-1"/);
+    assert.equal(result.next_cursor.includes("task-2"), false);
   });
 
   it("revises seen pending tasks even when they miss the max_open window", async () => {
@@ -201,7 +203,7 @@ describe("CrmOpsPollConnector", () => {
     assert.match(result.next_cursor, /"task-new"/);
   });
 
-  it("does not let LEAVE_PENDING occupy the max_open window", async () => {
+  it("drops parked LEAVE_PENDING tasks from seen during sync", async () => {
     const cursor = {
       value: formatSeenCursor("all", { "task-parked": "old" }),
     };
@@ -225,11 +227,11 @@ describe("CrmOpsPollConnector", () => {
     );
     assert.equal(operations["ops_task:task-new:task"], "create");
     assert.equal(operations["ops_task:task-parked:task"], undefined);
-    assert.match(result.next_cursor, /"task-parked"/);
     assert.match(result.next_cursor, /"task-new"/);
+    assert.equal(result.next_cursor.includes("task-parked"), false);
   });
 
-  it("does not let a rejected complete occupy the max_open window", async () => {
+  it("drops rejected complete tasks from seen during sync", async () => {
     const cursor = {
       value: formatSeenCursor("all", { "task-failed": "old" }),
     };
@@ -255,8 +257,8 @@ describe("CrmOpsPollConnector", () => {
       result.batch.records.map((record) => [record.external_id, record.operation]),
     );
     assert.equal(operations["ops_task:task-new:task"], "create");
-    assert.match(result.next_cursor, /"task-failed"/);
     assert.match(result.next_cursor, /"task-new"/);
+    assert.equal(result.next_cursor.includes("task-failed"), false);
   });
 
   it("folds a parked LEAVE_PENDING task off shown instead of unhiding", async () => {
@@ -284,6 +286,37 @@ describe("CrmOpsPollConnector", () => {
     const result = await connector.poll(cursor);
     assert.equal(result.next_cursor.includes("task-parked"), false);
     assert.deepEqual(hidden, ["crm:ops_task:task-parked"]);
+  });
+
+  it("drops ledger-released tasks from seen on the next poll", async () => {
+    const ledger = new OpenWindowLedger();
+    const first = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+          items: [sampleOpsTask(), sampleOpsTask({ id: "task-2" })],
+        }),
+      },
+      { max_open_tasks: 1, openWindowLedger: ledger },
+    );
+    const created = await first.connector.poll(null);
+    ledger.release("task-1");
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+          items: [sampleOpsTask({ id: "task-2" }), sampleOpsTask({ id: "task-3" })],
+        }),
+      },
+      { max_open_tasks: 1, openWindowLedger: ledger },
+    );
+    const result = await connector.poll({ value: created.next_cursor });
+    const operations = Object.fromEntries(
+      result.batch.records.map((record) => [record.external_id, record.operation]),
+    );
+    assert.equal(operations["ops_task:task-2:task"], "create");
+    assert.equal(operations["ops_task:task-3:task"], undefined);
+    assert.equal(result.next_cursor.includes("task-1"), false);
+    assert.match(result.next_cursor, /"task-2"/);
+    assert.equal(result.next_cursor.includes("task-3"), false);
   });
 
   it("drops the seen set when token scope changes", async () => {

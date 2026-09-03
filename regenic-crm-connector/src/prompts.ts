@@ -95,7 +95,7 @@ function sceneDescription(scene: string): string {
     case "MORE_NAMES":
       return "对方给了更多达人名单，致谢后关单（不提报；本线程已有报价应改 QUOTE_PLUS_Q）";
     case "QUOTE_PLUS_Q":
-      return "按本线程报价提报，可选收悉回邮后关单";
+      return "按本线程报价提报（CRM 选价同邮件提报：符合档最低价），可选收悉回邮后关单";
     case "QUOTE_UNPARSED_RANGE":
       return "报价是区间，按最高价提报后关单";
     case "REAL_HUMAN":
@@ -172,6 +172,7 @@ export async function answerOpsPrompt(
   client: CrmClient,
   target: string,
   answer: PromptAnswer,
+  onReleased?: (taskId: string) => void,
 ): Promise<{ accepted: boolean }> {
   const taskId = parseOpsTaskId(target);
   const fromPrompt = parseOpsTaskId(answer.prompt_id);
@@ -197,8 +198,9 @@ export async function answerOpsPrompt(
       `DSH action ${conclusion.action} is not allowed by this task reviewGuide`,
     );
   }
+  let accepted = false;
   try {
-    await client.completeOpsTask(taskId, {
+    accepted = await client.completeOpsTask(taskId, {
       action: conclusion.action,
       scene: conclusion.scene,
       comment: auditComment({
@@ -208,24 +210,10 @@ export async function answerOpsPrompt(
         promptText: promptText(answer, conclusion.action),
       }),
     });
-    return { accepted: true };
-  } catch (error) {
-    if (error instanceof CrmApiError && error.status === 409) {
-      let latest: CrmOpsTask | null = null;
-      try {
-        latest = await client.getOpsTask(taskId);
-      } catch (inner) {
-        if (inner instanceof CrmApiError && (inner.status === 404 || inner.status === 409)) {
-          return { accepted: true };
-        }
-        throw inner;
-      }
-      if (!isEmailSubmitPending(latest)) {
-        return { accepted: true };
-      }
-    }
-    throw error;
+  } finally {
+    onReleased?.(taskId);
   }
+  return { accepted };
 }
 
 function parseOpsConclusion(answer: PromptAnswer): {
@@ -260,6 +248,7 @@ export async function answerOrderPrompt(
   client: CrmClient,
   target: string,
   answer: PromptAnswer,
+  onReleased?: (orderId: string) => void,
 ): Promise<{ accepted: boolean }> {
   const orderId = parseOrderId(target);
   const fromPrompt = parseOrderId(answer.prompt_id);
@@ -282,8 +271,9 @@ export async function answerOrderPrompt(
   if (!isPendingHumanOrder(order)) {
     return { accepted: true };
   }
+  let accepted = false;
   try {
-    await client.submitOrderInternalReview(orderId, {
+    accepted = await client.submitOrderInternalReview(orderId, {
       result,
       comment: auditComment({
         queue: "order",
@@ -292,13 +282,10 @@ export async function answerOrderPrompt(
         promptText: promptText(answer, result),
       }),
     });
-    return { accepted: true };
-  } catch (error) {
-    if (error instanceof CrmApiError && error.status === 409) {
-      return { accepted: true };
-    }
-    throw error;
+  } finally {
+    onReleased?.(orderId);
   }
+  return { accepted };
 }
 
 function requireOrderResult(answer: PromptAnswer): OrderReviewResult {

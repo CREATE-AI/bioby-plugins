@@ -6,6 +6,7 @@ export * from "./locators";
 export * from "./locales";
 export * from "./list-fold";
 export * from "./crm-client";
+export * from "./open-window";
 export * from "./reconcile";
 export * from "./records";
 export * from "./prompts";

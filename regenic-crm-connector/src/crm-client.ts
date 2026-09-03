@@ -296,28 +296,27 @@ export class CrmClient {
       submit_quote?: CrmSubmitQuote;
       comment: string;
     },
-  ): Promise<void> {
-    const payload = unwrapPayload(
-      await this.request(
-        "POST",
-        `/internal/regenic/ops-tasks/${encodeURIComponent(taskId)}/complete`,
-        {
-          action: input.action,
-          scene: input.scene,
-          submit_quote: input.submit_quote,
-          comment: input.comment,
-        },
-      ),
-    );
-    const task = parseOpsTask(payload);
-    if (!task) {
-      return;
-    }
-    if (isEmailSubmitPending(task) && !isOpsWindowParked(task)) {
-      throw new CrmApiError(
-        502,
-        `CRM complete left ops task ${taskId} pending without a parked outcome`,
+  ): Promise<boolean> {
+    try {
+      const payload = unwrapPayload(
+        await this.request(
+          "POST",
+          `/internal/regenic/ops-tasks/${encodeURIComponent(taskId)}/complete`,
+          {
+            action: input.action,
+            scene: input.scene,
+            submit_quote: input.submit_quote,
+            comment: input.comment,
+          },
+        ),
       );
+      parseOpsTask(payload);
+      return true;
+    } catch (error) {
+      if (error instanceof CrmApiError) {
+        return false;
+      }
+      throw error;
     }
   }
 
@@ -344,12 +343,20 @@ export class CrmClient {
   async submitOrderInternalReview(
     projectFieldId: string,
     input: { result: OrderReviewResult; comment: string },
-  ): Promise<void> {
-    await this.request(
-      "POST",
-      `/internal/regenic/orders/${encodeURIComponent(projectFieldId)}/internal-review`,
-      { result: input.result, comment: input.comment },
-    );
+  ): Promise<boolean> {
+    try {
+      await this.request(
+        "POST",
+        `/internal/regenic/orders/${encodeURIComponent(projectFieldId)}/internal-review`,
+        { result: input.result, comment: input.comment },
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof CrmApiError) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   private async request(
