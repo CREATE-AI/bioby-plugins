@@ -104,7 +104,7 @@ bioby-plugins/regenic-crm-connector/    # @bioby/regenic-crm-connector
 |---|---|---|
 | 待审运营任务 | `task` | 线程上唯一 task |
 | 任务仍待审、字段变了 | `revise` | 仍在当前工作 |
-| 已关单 / 删除 | **折进「不显示」** | 事件保留，Hidden 可打开；`LEAVE_PENDING` 仍待审，不折 |
+| 已关单 / 删除 | **折进「不显示」** | 事件保留，Hidden 可打开；`LEAVE_PENDING` / parked 同样折进「不显示」（与订单 AI 内审、内核 done fold 一致） |
 | 邮件正文、订单摘要 | `body` / 以后 `utterance` | 不是第二张 task |
 | DSH 结论 → 四决策 + scene | 执行器结果，经连接器 complete | 不入库为人话气泡 |
 
@@ -137,7 +137,7 @@ bioby-plugins/regenic-crm-connector/    # @bioby/regenic-crm-connector
 |---|---|---|
 | 进入待审 | create `task` | `crm:ops_task:<taskId>` |
 | 待审中更新（底稿、指引变了） | revise `task` | 不变 |
-| 已关单 / 消失 | 折进「不显示」 | 不变；留待审不折 |
+| 已关单 / 消失 | 折进「不显示」 | 不变；parked（LEAVE_PENDING）同样折 |
 | DSH 结论写回 | 连接器 `complete`（机器调用，不是等人点） | `crm:ops:<taskId>` |
 
 `conversation_label`：`{项目或达人} · 邮件提报待审`。`list_title`：`conversation`。
@@ -192,7 +192,7 @@ occupying  = seen 中尚无终端 Regenic 结论的，占 max_open_tasks
 parked     = 有 regenicComplete（含 LEAVE_PENDING）或 regenicLastAttempt
 ```
 
-`live[]` = occupying + parked + newcomers。新的 create，变了 revise，`seen - live` 折进「不显示」（不 tombstone）。`LEAVE_PENDING` / complete 400 不占窗口。不能只靠列表 cursor 发现「已继续/已关闭」。
+`live[]` = occupying + newcomers（**不含** parked）。新的 create，变了 revise，`seen - live` 且已关单或 parked → 折进「不显示」（不 tombstone）。`LEAVE_PENDING` / complete 400 不占窗口。不能只靠列表 cursor 发现「已继续/已关闭」。
 
 ### 10.3 CRM 接口（须配合改）
 
