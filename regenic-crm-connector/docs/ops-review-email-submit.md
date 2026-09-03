@@ -171,8 +171,7 @@ CRM  EMAIL_SUBMIT_AUTOMATION + PENDING_REVIEW（邮件提报待审）
        SUBMIT_THEN_CLOSE  → 尝试提报 → 可选收悉（仅提报成功）→ CLOSED + 锚点标星
        CLOSE_ONLY         → CLOSED + 锚点标星
        LEAVE_PENDING      → 仍 PENDING_REVIEW，写审计，不标星
-  → 已关闭：对账折进「不显示」（conversation_prefs.hidden），不 tombstone
-  → 留待审：仍在 live[] 与「显示」栏，本 event 不重跑；CRM 内容 revise 才再判
+  → 已关闭 / LEAVE_PENDING（parked）：内核 done fold + 对账折进「不显示」，不 tombstone
 ```
 
 判断者是 DSH，执行者是连接器 `complete`，副作用在 CRM。顺序不能对调，不能改成「先人点、DSH 可选」。
@@ -271,7 +270,7 @@ GET /internal/regenic/ops-tasks/{taskId}
 | `POST complete` 原样传递 | 把四值折回 `approve`/`close` |
 | 离开待审后折进「不显示」（与订单 AI 内审相同；不 tombstone） | 调订单 `internal-review` |
 
-`LEAVE_PENDING` 成功后任务仍 `PENDING_REVIEW`，但 **不再进入 pending-ops-tasks 拉取列表**。桌面工单留在「显示」并进入 **需关注**（写回 recipe 完工不再被内核折进 Hidden）。complete 失败且仍待审时写 `regenicLastAttempt`（400 / 仍待审的 409 / 500），同样退出拉取、进需关注。已关单才折进「不显示」。
+`LEAVE_PENDING` 成功后任务仍 `PENDING_REVIEW`，但 **不再进入 pending-ops-tasks 拉取列表**。Regenic 工单与订单 AI 内审一样：内核 done 时 `foldThreadByPolicy` 进「不显示」；对账发现 parked / 已关单也折进「不显示」，不再留在「显示 / 需关注」。complete 失败且仍待审时写 `regenicLastAttempt`，同样退出拉取并折进「不显示」。
 
 ---
 
@@ -279,13 +278,13 @@ GET /internal/regenic/ops-tasks/{taskId}
 
 ```text
 stream_key = crm:pending-ops:scoped | crm:pending-ops:all
-seen       = 已 ingest、仍待审的 crm:ops_task:*（含 parked）
-occupying  = seen 中尚无终端 Regenic 结论的，占 max_open_tasks
+seen       = 已 ingest 的 crm:ops_task:*（占坑中的待审）
+occupying  = seen 中尚无终端 Regenic 结论、仍占 max_open_tasks 的
 parked     = 有 regenicComplete（含 LEAVE_PENDING）或 regenicLastAttempt
-live[]     = occupying + parked + 本轮 newcomers
+live[]     = occupying + 本轮 newcomers（不含 parked）
 ```
 
-`max_open_tasks` 只限制 AI 进行中，不限制 inbox 里还挂着的待审。`seen - live`（已 `CLOSED` / 已不在待审）→ 折进「不显示」，事件保留，可在 Hidden 打开。`LEAVE_PENDING` 仍在 `live[]`，但不占坑。ingest `record.thread.id` 必须是 `ops_task:<id>`（不要带 `crm:`），内核拼完才是 inbox 会话 `crm:ops_task:<id>`；写错会变成 `crm:crm:ops_task:<id>`，「不显示」栏对不上。
+`max_open_tasks` 只限制 AI 进行中。`seen - live` 且已关单或 parked → 折进「不显示」，事件保留，可在 Hidden 打开。ingest `record.thread.id` 必须是 `ops_task:<id>`（不要带 `crm:`），内核拼完才是 inbox 会话 `crm:ops_task:<id>`；写错会变成 `crm:crm:ops_task:<id>`，「不显示」栏对不上。
 
 ---
 

@@ -22,7 +22,6 @@ function createConnector(routes, extras = {}) {
       max_open_tasks: extras.max_open_tasks ?? 50,
       now: () => "2026-08-26T00:00:00.000Z",
       hideThread: extras.hideThread,
-      unhideThread: extras.unhideThread,
     },
   );
   return { connector, fetch };
@@ -260,9 +259,8 @@ describe("CrmOpsPollConnector", () => {
     assert.match(result.next_cursor, /"task-new"/);
   });
 
-  it("releases a parked task from seen and unhides it instead of folding", async () => {
+  it("folds a parked LEAVE_PENDING task off shown instead of unhiding", async () => {
     const hidden = [];
-    const shown = [];
     const cursor = {
       value: formatSeenCursor("all", { "task-parked": "old" }),
     };
@@ -281,15 +279,11 @@ describe("CrmOpsPollConnector", () => {
         hideThread: async (threadId) => {
           hidden.push(threadId);
         },
-        unhideThread: async (threadId) => {
-          shown.push(threadId);
-        },
       },
     );
     const result = await connector.poll(cursor);
     assert.equal(result.next_cursor.includes("task-parked"), false);
-    assert.deepEqual(hidden, []);
-    assert.deepEqual(shown, ["crm:ops_task:task-parked"]);
+    assert.deepEqual(hidden, ["crm:ops_task:task-parked"]);
   });
 
   it("drops the seen set when token scope changes", async () => {
