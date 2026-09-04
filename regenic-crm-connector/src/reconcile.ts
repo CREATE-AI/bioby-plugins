@@ -14,9 +14,15 @@ export const CRM_STREAM_PACE = {
 } as const;
 
 export interface SeenCursor {
-  v: 1;
+  v: 1 | 2;
   scope: CrmScope;
   seen: Record<string, string>;
+  pendingRelease?: string[];
+}
+
+export interface SeenCursorState {
+  seen: Record<string, string>;
+  pendingRelease: string[];
 }
 
 export interface LiveReconcileItem {
@@ -26,17 +32,17 @@ export interface LiveReconcileItem {
   revise(): IngestRecord;
 }
 
-export function parseSeenCursor(
+export function parseSeenCursorState(
   cursor: ConnectorCursor | null,
   scope: CrmScope,
-): Record<string, string> {
+): SeenCursorState {
   if (!cursor?.value) {
-    return {};
+    return { seen: {}, pendingRelease: [] };
   }
   try {
     const parsed = JSON.parse(cursor.value) as Partial<SeenCursor>;
-    if (parsed.v !== 1 || parsed.scope !== scope || !isObject(parsed.seen)) {
-      return {};
+    if ((parsed.v !== 1 && parsed.v !== 2) || parsed.scope !== scope || !isObject(parsed.seen)) {
+      return { seen: {}, pendingRelease: [] };
     }
     const seen: Record<string, string> = {};
     for (const [id, revision] of Object.entries(parsed.seen)) {
@@ -44,17 +50,34 @@ export function parseSeenCursor(
         seen[id] = revision;
       }
     }
-    return seen;
+    const pendingRelease = Array.isArray(parsed.pendingRelease)
+      ? uniquePendingRelease(parsed.pendingRelease)
+      : [];
+    return { seen, pendingRelease };
   } catch {
-    return {};
+    return { seen: {}, pendingRelease: [] };
   }
+}
+
+export function parseSeenCursor(
+  cursor: ConnectorCursor | null,
+  scope: CrmScope,
+): Record<string, string> {
+  return parseSeenCursorState(cursor, scope).seen;
 }
 
 export function formatSeenCursor(
   scope: CrmScope,
   seen: Record<string, string>,
+  pendingRelease: string[] = [],
 ): string {
-  const cursor: SeenCursor = { v: 1, scope, seen: sortKeys(seen) };
+  const pending = uniquePendingRelease(pendingRelease);
+  const cursor: SeenCursor = {
+    v: 2,
+    scope,
+    seen: sortKeys(seen),
+    ...(pending.length > 0 ? { pendingRelease: pending } : {}),
+  };
   return JSON.stringify(cursor);
 }
 
@@ -191,6 +214,10 @@ function sortKeys(seen: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(seen).sort(([left], [right]) => left.localeCompare(right)),
   );
+}
+
+function uniquePendingRelease(ids: readonly string[]): string[] {
+  return [...new Set(ids.map((id) => id.trim()).filter(Boolean))].sort();
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

@@ -269,9 +269,23 @@ export class CrmClient {
     return secret || undefined;
   }
 
-  async listPendingOpsTasks(): Promise<CrmOpsTask[]> {
+  async listPendingOpsTasks(options?: {
+    page?: number;
+    size?: number;
+  }): Promise<CrmOpsTask[]> {
+    const params = new URLSearchParams();
+    if (options?.page !== undefined) {
+      params.set("page", String(options.page));
+    }
+    if (options?.size !== undefined) {
+      params.set("size", String(options.size));
+    }
+    const query = params.toString();
     const payload = unwrapPayload(
-      await this.request("GET", "/internal/regenic/pending-ops-tasks"),
+      await this.request(
+        "GET",
+        `/internal/regenic/pending-ops-tasks${query ? `?${query}` : ""}`,
+      ),
     );
     return parseList(payload, parseOpsTask).filter(isEmailSubmitPending);
   }
@@ -320,10 +334,21 @@ export class CrmClient {
     }
   }
 
-  async listPendingHumanOrders(): Promise<CrmOrder[]> {
+  async listPendingHumanOrders(options?: {
+    page?: number;
+    size?: number;
+  }): Promise<CrmOrder[]> {
+    const params = new URLSearchParams();
+    if (options?.page !== undefined) {
+      params.set("page", String(options.page));
+    }
+    if (options?.size !== undefined) {
+      params.set("size", String(options.size));
+    }
+    const query = params.toString();
     const payload = await this.request(
       "GET",
-      "/internal/regenic/pending-human-orders",
+      `/internal/regenic/pending-human-orders${query ? `?${query}` : ""}`,
     );
     return parseList(unwrapPayload(payload), parseOrder).filter(isPendingHumanOrder);
   }

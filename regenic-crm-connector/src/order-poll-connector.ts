@@ -7,13 +7,20 @@ import {
   isPendingHumanOrder,
 } from "./crm-client";
 import { foldGoneIds, type HideThread } from "./list-fold";
-import { OpenWindowLedger, uniqueIds } from "./open-window";
+import {
+  OpenWindowLedger,
+  openWindowStoreKey,
+  uniqueIds,
+} from "./open-window";
 import { CRM_SOURCE, crmScopeOf, orderThreadId } from "./locators";
 import { orderRecord } from "./records";
 import {
-  formatSeenCursor,
-  parseSeenCursor,
-  reconcileRecords,
+  collectPendingReleases,
+  finalizeOpenWindowPoll,
+  reconcileSeenIds,
+} from "./poll-reconcile";
+import {
+  parseSeenCursorState,
   revisionOf,
   selectOpenWindow,
   toPollResult,
@@ -26,6 +33,7 @@ export interface CrmOrderPollConnectorOptions {
   now?: () => string;
   hideThread?: HideThread;
   openWindowLedger?: OpenWindowLedger;
+  findLocallyFinishedIds?: (ids: readonly string[]) => Promise<string[]>;
 }
 
 export class CrmOrderPollConnector {
@@ -46,43 +54,71 @@ export class CrmOrderPollConnector {
 
   async poll(cursor: ConnectorCursor | null): Promise<PollResult> {
     const scope = crmScopeOf(this.client.hasToken);
-    const seen = parseSeenCursor(cursor, scope);
-    const listed = await this.client.listPendingHumanOrders();
-    const { live, maybeGone, releaseFromSeen } = selectOpenWindow(
-      listed,
-      seen,
-      this.maxOpen,
-      undefined,
-      this.options.openWindowLedger?.peek(),
-    );
-    const dropFromSeen = uniqueIds([
-      ...releaseFromSeen,
-      ...(this.options.openWindowLedger?.drain() ?? []),
-    ]);
-    const confirmedGone = await this.confirmGone(maybeGone);
-    const toFold = uniqueIds([...confirmedGone, ...dropFromSeen]);
-    await foldGoneIds(toFold, this.options.hideThread, orderThreadId);
-    const reconciled = reconcileRecords({
-      seen,
-      live: live.map((order) => {
-        const revision = revisionOf(order);
-        return {
-          id: order.id,
-          revision,
-          create: () => orderRecord(order, "create", revision),
-          revise: () => orderRecord(order, "revise", revision),
-        };
-      }),
-      disappeared: uniqueIds([...confirmedGone, ...dropFromSeen]).map((id) => ({ id })),
+    const storeKey = openWindowStoreKey(this.options.connector_id, scope, "order");
+    const { seen } = parseSeenCursorState(cursor, scope);
+    const pendingRelease = await collectPendingReleases({
+      cursor,
+      scope,
+      storeKey,
+      ledger: this.options.openWindowLedger,
     });
-    const nextCursor = formatSeenCursor(scope, reconciled.nextSeen);
-    return toPollResult({
+    const seenDrop = await reconcileSeenIds(Object.keys(seen), async (id) => {
+      try {
+        const order = await this.client.getOrder(id);
+        if (!isPendingHumanOrder(order)) {
+          return "drop";
+        }
+        return "keep";
+      } catch (error) {
+        if (error instanceof CrmApiError && (error.status === 404 || error.status === 409)) {
+          return "drop";
+        }
+        throw error;
+      }
+    });
+    const localDrop =
+      (await this.options.findLocallyFinishedIds?.(Object.keys(seen))) ?? [];
+    const preDrop = uniqueIds([...pendingRelease, ...seenDrop, ...localDrop]);
+    let listed: CrmOrder[] = [];
+    try {
+      listed = await this.client.listPendingHumanOrders({
+        page: 0,
+        size: Math.max(this.maxOpen * 2, 100),
+      });
+    } catch (error) {
+      if (error instanceof CrmApiError && error.status === 401) {
+        throw error;
+      }
+    }
+    return finalizeOpenWindowPoll({
+      cursor,
+      scope,
+      storeKey,
+      seen,
+      ledger: this.options.openWindowLedger,
+      preDrop,
+      listed,
+      maxOpen: this.maxOpen,
+      occupies: () => true,
+      skipOccupying: new Set(preDrop),
+      confirmMaybeGone: (ids) => this.confirmGone(ids),
+      toLiveItems: (live) =>
+        live.map((order) => {
+          const revision = revisionOf(order);
+          return {
+            id: order.id,
+            revision,
+            create: () => orderRecord(order, "create", revision),
+            revise: () => orderRecord(order, "revise", revision),
+          };
+        }),
+      foldThreadId: orderThreadId,
+      hideThread: this.options.hideThread,
       connectorId: this.options.connector_id,
       orgId: this.options.org_id,
       receivedAt: this.now(),
-      cursor: cursor?.value,
-      nextCursor,
-      records: reconciled.records,
+      selectOpenWindow,
+      toPollResult,
     });
   }
 

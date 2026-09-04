@@ -22,6 +22,7 @@ export interface CrmOpsReviewPluginConfig {
   now?: () => string;
   hideThread?: HideThread;
   openWindowLedger?: OpenWindowLedger;
+  findLocallyFinishedIds?: (ids: readonly string[]) => Promise<string[]>;
 }
 
 export interface CrmOrderReviewPluginConfig {
@@ -35,6 +36,7 @@ export interface CrmOrderReviewPluginConfig {
   now?: () => string;
   hideThread?: HideThread;
   openWindowLedger?: OpenWindowLedger;
+  findLocallyFinishedIds?: (ids: readonly string[]) => Promise<string[]>;
 }
 
 export const crmOpsReviewPlugin = definePlugin<CrmOpsReviewPluginConfig>({
@@ -56,6 +58,7 @@ export const crmOpsReviewPlugin = definePlugin<CrmOpsReviewPluginConfig>({
         now: config.now,
         hideThread: config.hideThread,
         openWindowLedger: config.openWindowLedger,
+        findLocallyFinishedIds: config.findLocallyFinishedIds,
       },
     );
     const scope = crmScopeOf(crmHasToken(env, config.credentials_ref));
@@ -89,6 +92,7 @@ export const crmOrderReviewPlugin = definePlugin<CrmOrderReviewPluginConfig>({
         now: config.now,
         hideThread: config.hideThread,
         openWindowLedger: config.openWindowLedger,
+        findLocallyFinishedIds: config.findLocallyFinishedIds,
       },
     );
     const scope = crmScopeOf(crmHasToken(env, config.credentials_ref));

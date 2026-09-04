@@ -6,8 +6,10 @@ import {
   type ChannelDriver,
   type ConnectorHost,
   type ConnectorInstallation,
+  type ConversationThread,
   type JsonValue,
   type NewConnectorInstallation,
+  type ResolveStreamsOptions,
   type SyncSource,
 } from "@regenic/domain";
 import {
@@ -34,10 +36,12 @@ import {
   opsStreamKey,
   writeBackLabels,
 } from "./locators";
+import { readCrmOpenWindowPollHooks } from "./open-window-poll-hooks";
 import { crmLocaleTables } from "./locales";
 import { answerOpsPrompt, listOpsPrompts } from "./prompts";
 import { crmOpsReviewPlugin } from "./plugin";
 import { opsConversationLabel } from "./records";
+import { releaseThreadFromOpenWindow } from "./release-open-window";
 import { createCrmOpsSyncSource } from "./sync-source";
 import {
   OpenWindowLedger,
@@ -45,7 +49,16 @@ import {
   releaseOpsOpenWindow,
 } from "./open-window";
 
-export const crmOpsReviewDriver: ChannelDriver = {
+export type CrmOpsReviewDriver = ChannelDriver & {
+  releaseOpenWindow(
+    installation: ConnectorInstallation,
+    thread: ConversationThread,
+    host: ConnectorHost,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void>;
+};
+
+export const crmOpsReviewDriver: CrmOpsReviewDriver = {
   connector_type: OPS_CONNECTOR_TYPE,
   source: CRM_SOURCE,
   connector_protocol: CONNECTOR_PROTOCOL,
@@ -87,8 +100,13 @@ export const crmOpsReviewDriver: ChannelDriver = {
     };
   },
 
-  async resolveStreams(installation, host, env) {
-    return [await mountOpsStream(host, installation, env)];
+  async resolveStreams(installation, host, env, options) {
+    const hooks = readCrmOpenWindowPollHooks(options);
+    return [
+      await mountOpsStream(host, installation, env, {
+        findLocallyFinishedIds: hooks.findLocallyFinishedIds,
+      }),
+    ];
   },
 
   async bindSyncSource(installation, _host, env): Promise<SyncSource> {
@@ -207,11 +225,15 @@ export const crmOpsReviewDriver: ChannelDriver = {
         }),
         thread.target,
         answer,
-        (taskId) => releaseOpsOpenWindow(installation.id, taskId),
+        (taskId) => releaseOpsOpenWindow(installation.id, crmScopeOf(crmHasToken(env, installation.credentials_ref)), taskId),
       );
     } catch (error) {
       mapCrmError(error, "send");
     }
+  },
+
+  async releaseOpenWindow(installation, thread, host, env) {
+    releaseThreadFromOpenWindow(installation.id, crmScopeOf(crmHasToken(env, installation.credentials_ref)), thread, host, env);
   },
 };
 
@@ -232,7 +254,11 @@ export async function mountOpsStream(
   host: ConnectorHost,
   installation: ConnectorInstallation,
   env: NodeJS.ProcessEnv,
-  extras: { fetch?: CrmFetch; now?: () => string } = {},
+  extras: {
+    fetch?: CrmFetch;
+    now?: () => string;
+    findLocallyFinishedIds?: (ids: readonly string[]) => Promise<string[]>;
+  } = {},
 ) {
   const scope = crmScopeOf(crmHasToken(env, installation.credentials_ref));
   const streamKey = opsStreamKey(scope);
@@ -249,6 +275,7 @@ export async function mountOpsStream(
       fetch: extras.fetch,
       now: extras.now,
       openWindowLedger,
+      findLocallyFinishedIds: extras.findLocallyFinishedIds,
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);
