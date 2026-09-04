@@ -23,6 +23,7 @@ function createConnector(routes, extras = {}) {
       max_open_tasks: extras.max_open_tasks ?? 50,
       now: () => "2026-08-26T00:00:00.000Z",
       hideThread: extras.hideThread,
+      findLocallyFinishedIds: extras.findLocallyFinishedIds,
     },
   );
   return { connector, fetch };
@@ -74,6 +75,10 @@ describe("CrmOpsPollConnector", () => {
         "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
           items: [sampleOpsTask({ nextAction: "STILL_NEED_REVIEW" })],
         }),
+        "GET /internal/regenic/ops-tasks/task-1": jsonResponse(
+          200,
+          sampleOpsTask({ nextAction: "STILL_NEED_REVIEW" }),
+        ),
         "GET /internal/regenic/ops-tasks/task-2": jsonResponse(404),
       },
       {
@@ -128,6 +133,10 @@ describe("CrmOpsPollConnector", () => {
         "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
           items: [sampleOpsTask({ nextAction: "STILL_NEED_REVIEW" })],
         }),
+        "GET /internal/regenic/ops-tasks/task-1": jsonResponse(
+          200,
+          sampleOpsTask({ nextAction: "STILL_NEED_REVIEW" }),
+        ),
         "GET /internal/regenic/ops-tasks/task-2": jsonResponse(404),
       },
       {
@@ -158,6 +167,14 @@ describe("CrmOpsPollConnector", () => {
             sampleOpsTask({ id: "task-3" }),
           ],
         }),
+        "GET /internal/regenic/ops-tasks/task-1": jsonResponse(
+          200,
+          sampleOpsTask({ id: "task-1", nextAction: "STILL_NEED_REVIEW" }),
+        ),
+        "GET /internal/regenic/ops-tasks/task-2": jsonResponse(
+          200,
+          sampleOpsTask({ id: "task-2" }),
+        ),
       },
       { max_open_tasks: 1 },
     );
@@ -174,7 +191,7 @@ describe("CrmOpsPollConnector", () => {
     );
     assert.equal(
       fetch.calls.some((call) => call.pathname === "/internal/regenic/ops-tasks/task-1"),
-      false,
+      true,
     );
     assert.match(result.next_cursor, /"task-1"/);
     assert.match(result.next_cursor, /"task-2"/);
@@ -317,6 +334,54 @@ describe("CrmOpsPollConnector", () => {
     assert.equal(result.next_cursor.includes("task-1"), false);
     assert.match(result.next_cursor, /"task-2"/);
     assert.equal(result.next_cursor.includes("task-3"), false);
+  });
+
+  it("drops cursor pendingRelease without waiting for the fat pending list", async () => {
+    const cursor = {
+      value: formatSeenCursor("all", { "task-1": "old", "task-2": "old" }, ["task-1"]),
+    };
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": () => {
+          throw new Error("list unavailable");
+        },
+        "GET /internal/regenic/ops-tasks/task-2": jsonResponse(
+          200,
+          sampleOpsTask({ id: "task-2", nextAction: "STILL_NEED_REVIEW" }),
+        ),
+      },
+      { max_open_tasks: 1 },
+    );
+    const result = await connector.poll(cursor);
+    assert.equal(result.next_cursor.includes("task-1"), false);
+    assert.match(result.next_cursor, /"task-2"/);
+    assert.equal(result.next_cursor.includes("pendingRelease"), false);
+  });
+
+  it("drops seen ids when local work is already finished", async () => {
+    const cursor = {
+      value: formatSeenCursor("all", { "task-done": "old", "task-live": "old" }),
+    };
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, { items: [] }),
+        "GET /internal/regenic/ops-tasks/task-done": jsonResponse(
+          200,
+          sampleOpsTask({ id: "task-done", nextAction: "NEED_MANUAL_REVIEW" }),
+        ),
+        "GET /internal/regenic/ops-tasks/task-live": jsonResponse(
+          200,
+          sampleOpsTask({ id: "task-live", nextAction: "NEED_MANUAL_REVIEW" }),
+        ),
+      },
+      {
+        findLocallyFinishedIds: async (ids) =>
+          ids.filter((id) => id === "task-done"),
+      },
+    );
+    const result = await connector.poll(cursor);
+    assert.equal(result.next_cursor.includes("task-done"), false);
+    assert.match(result.next_cursor, /"task-live"/);
   });
 
   it("drops the seen set when token scope changes", async () => {

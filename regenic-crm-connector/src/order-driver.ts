@@ -6,8 +6,10 @@ import {
   type ChannelDriver,
   type ConnectorHost,
   type ConnectorInstallation,
+  type ConversationThread,
   type JsonValue,
   type NewConnectorInstallation,
+  type ResolveStreamsOptions,
   type SyncSource,
 } from "@regenic/domain";
 import {
@@ -34,10 +36,12 @@ import {
   orderStreamKey,
   writeBackLabels,
 } from "./locators";
+import { readCrmOpenWindowPollHooks } from "./open-window-poll-hooks";
 import { crmLocaleTables } from "./locales";
 import { crmOrderReviewPlugin } from "./plugin";
 import { answerOrderPrompt, listOrderPrompts } from "./prompts";
 import { orderConversationLabel } from "./records";
+import { releaseThreadFromOpenWindow } from "./release-open-window";
 import { createCrmOrderSyncSource } from "./sync-source";
 import {
   OpenWindowLedger,
@@ -45,7 +49,16 @@ import {
   releaseOrderOpenWindow,
 } from "./open-window";
 
-export const crmOrderReviewDriver: ChannelDriver = {
+export type CrmOrderReviewDriver = ChannelDriver & {
+  releaseOpenWindow(
+    installation: ConnectorInstallation,
+    thread: ConversationThread,
+    host: ConnectorHost,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void>;
+};
+
+export const crmOrderReviewDriver: CrmOrderReviewDriver = {
   connector_type: ORDER_CONNECTOR_TYPE,
   source: CRM_SOURCE,
   connector_protocol: CONNECTOR_PROTOCOL,
@@ -87,8 +100,13 @@ export const crmOrderReviewDriver: ChannelDriver = {
     };
   },
 
-  async resolveStreams(installation, host, env) {
-    return [await mountOrderStream(host, installation, env)];
+  async resolveStreams(installation, host, env, options) {
+    const hooks = readCrmOpenWindowPollHooks(options);
+    return [
+      await mountOrderStream(host, installation, env, {
+        findLocallyFinishedIds: hooks.findLocallyFinishedIds,
+      }),
+    ];
   },
 
   async bindSyncSource(installation, _host, env): Promise<SyncSource> {
@@ -209,11 +227,20 @@ export const crmOrderReviewDriver: ChannelDriver = {
         }),
         thread.target,
         answer,
-        (orderId) => releaseOrderOpenWindow(installation.id, orderId),
+        (orderId) =>
+          releaseOrderOpenWindow(
+            installation.id,
+            crmScopeOf(crmHasToken(env, installation.credentials_ref)),
+            orderId,
+          ),
       );
     } catch (error) {
       mapCrmError(error, "send");
     }
+  },
+
+  async releaseOpenWindow(installation, thread, host, env) {
+    releaseThreadFromOpenWindow(installation.id, crmScopeOf(crmHasToken(env, installation.credentials_ref)), thread, host, env);
   },
 };
 
@@ -238,7 +265,11 @@ export async function mountOrderStream(
   host: ConnectorHost,
   installation: ConnectorInstallation,
   env: NodeJS.ProcessEnv,
-  extras: { fetch?: CrmFetch; now?: () => string } = {},
+  extras: {
+    fetch?: CrmFetch;
+    now?: () => string;
+    findLocallyFinishedIds?: (ids: readonly string[]) => Promise<string[]>;
+  } = {},
 ) {
   const scope = crmScopeOf(crmHasToken(env, installation.credentials_ref));
   const streamKey = orderStreamKey(scope);
@@ -255,6 +286,7 @@ export async function mountOrderStream(
       fetch: extras.fetch,
       now: extras.now,
       openWindowLedger,
+      findLocallyFinishedIds: extras.findLocallyFinishedIds,
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);

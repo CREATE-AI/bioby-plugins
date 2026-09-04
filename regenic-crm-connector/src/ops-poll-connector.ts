@@ -8,14 +8,21 @@ import {
   isEmailSubmitPending,
 } from "./crm-client";
 import { foldGoneIds, type HideThread } from "./list-fold";
-import { OpenWindowLedger, uniqueIds } from "./open-window";
+import {
+  OpenWindowLedger,
+  openWindowStoreKey,
+  uniqueIds,
+} from "./open-window";
 import { CRM_SOURCE, crmScopeOf, opsTaskThreadId } from "./locators";
 import { opsTaskRecord } from "./records";
 import {
+  collectPendingReleases,
+  finalizeOpenWindowPoll,
+  reconcileSeenIds,
+} from "./poll-reconcile";
+import {
   CRM_STREAM_PACE,
-  formatSeenCursor,
-  parseSeenCursor,
-  reconcileRecords,
+  parseSeenCursorState,
   revisionOf,
   selectOpenWindow,
   toPollResult,
@@ -30,6 +37,7 @@ export interface CrmOpsPollConnectorOptions {
   now?: () => string;
   hideThread?: HideThread;
   openWindowLedger?: OpenWindowLedger;
+  findLocallyFinishedIds?: (ids: readonly string[]) => Promise<string[]>;
 }
 
 export class CrmOpsPollConnector {
@@ -50,59 +58,75 @@ export class CrmOpsPollConnector {
 
   async poll(cursor: ConnectorCursor | null): Promise<PollResult> {
     const scope = crmScopeOf(this.client.hasToken);
-    const seen = parseSeenCursor(cursor, scope);
-    let listed: CrmOpsTask[];
+    const storeKey = openWindowStoreKey(this.options.connector_id, scope, "ops");
+    const { seen } = parseSeenCursorState(cursor, scope);
+    const pendingRelease = await collectPendingReleases({
+      cursor,
+      scope,
+      storeKey,
+      ledger: this.options.openWindowLedger,
+    });
+    const seenDrop = await reconcileSeenIds(Object.keys(seen), async (id) => {
+      try {
+        const task = await this.client.getOpsTask(id);
+        if (!isEmailSubmitPending(task) || !occupiesOpsWindow(task)) {
+          return "drop";
+        }
+        return "keep";
+      } catch (error) {
+        if (error instanceof CrmApiError && (error.status === 404 || error.status === 409)) {
+          return "drop";
+        }
+        throw error;
+      }
+    });
+    const localDrop =
+      (await this.options.findLocallyFinishedIds?.(Object.keys(seen))) ?? [];
+    const preDrop = uniqueIds([...pendingRelease, ...seenDrop, ...localDrop]);
+    let listed: CrmOpsTask[] = [];
     try {
-      listed = await this.client.listPendingOpsTasks();
+      listed = await this.client.listPendingOpsTasks({
+        page: 0,
+        size: Math.max(this.maxOpen * 2, 100),
+      });
     } catch (error) {
       if (error instanceof CrmApiError && error.status === 401) {
         throw error;
       }
-      throw error;
+      // Keep reconciling seen slots when the fat list is slow or times out.
     }
-    const { live, maybeGone, releaseFromSeen } = selectOpenWindow(
+    return finalizeOpenWindowPoll({
+      cursor,
+      scope,
+      storeKey,
+      seen,
+      ledger: this.options.openWindowLedger,
+      preDrop,
       listed,
-      seen,
-      this.maxOpen,
-      occupiesOpsWindow,
-      this.options.openWindowLedger?.peek(),
-    );
-    const dropFromSeen = uniqueIds([
-      ...releaseFromSeen,
-      ...(this.options.openWindowLedger?.drain() ?? []),
-    ]);
-    const confirmedGone = await this.confirmGone(maybeGone);
-    const toFold = uniqueIds([...confirmedGone, ...dropFromSeen]);
-    await foldGoneIds(toFold, this.options.hideThread, opsTaskThreadId);
-    const reconciled = reconcileRecords({
-      seen,
-      live: live.map((task) => {
-        const revision = revisionOf(task);
-        return {
-          id: task.id,
-          revision,
-          create: () => opsTaskRecord(task, "create", revision),
-          revise: () => opsTaskRecord(task, "revise", revision),
-        };
-      }),
-      disappeared: uniqueIds([...confirmedGone, ...dropFromSeen]).map((id) => ({ id })),
-    });
-    const nextCursor = formatSeenCursor(scope, reconciled.nextSeen);
-    return toPollResult({
+      maxOpen: this.maxOpen,
+      occupies: occupiesOpsWindow,
+      skipOccupying: new Set(preDrop),
+      confirmMaybeGone: (ids) => this.confirmGone(ids),
+      toLiveItems: (live) =>
+        live.map((task) => {
+          const revision = revisionOf(task);
+          return {
+            id: task.id,
+            revision,
+            create: () => opsTaskRecord(task, "create", revision),
+            revise: () => opsTaskRecord(task, "revise", revision),
+          };
+        }),
+      foldThreadId: opsTaskThreadId,
+      hideThread: this.options.hideThread,
       connectorId: this.options.connector_id,
       orgId: this.options.org_id,
       receivedAt: this.now(),
-      cursor: cursor?.value,
-      nextCursor,
-      records: reconciled.records,
+      selectOpenWindow,
+      toPollResult,
     });
   }
 
-  /**
-   * Gone from the open window: closed, missing, or parked (LEAVE_PENDING /
-   * lastAttempt). Parked used to stay on Shown as 需关注; now fold like order
-   * review — same as kernel done →「不显示」.
-   */
   private async confirmGone(ids: string[]): Promise<string[]> {
     const fold: string[] = [];
     for (const id of ids) {
