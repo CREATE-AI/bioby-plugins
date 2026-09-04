@@ -34,15 +34,11 @@ export function createLocallyFinishedLookup(
   orgId: string,
   threadIdOf: (id: string) => string,
 ): (ids: readonly string[]) => Promise<string[]> {
-  let cachedItems: Promise<WorkItem[]> | null = null;
   return async (ids) => {
     if (ids.length === 0) {
       return [];
     }
-    if (!cachedItems) {
-      cachedItems = host.get("authority").listWorkItems(orgId);
-    }
-    const items = await cachedItems;
+    const items = await host.get("authority").listWorkItems(orgId);
     return locallyFinishedIds(items, ids, threadIdOf);
   };
 }

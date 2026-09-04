@@ -336,6 +336,28 @@ describe("CrmOpsPollConnector", () => {
     assert.equal(result.next_cursor.includes("task-3"), false);
   });
 
+  it("does not re-admit pendingRelease ids from the fat pending list", async () => {
+    const cursor = {
+      value: formatSeenCursor("all", { "task-released": "old" }, ["task-released"]),
+    };
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+          items: [sampleOpsTask({ id: "task-released", nextAction: "NEED_MANUAL_REVIEW" })],
+        }),
+        "GET /internal/regenic/ops-tasks/task-released": jsonResponse(
+          200,
+          sampleOpsTask({ id: "task-released", nextAction: "NEED_MANUAL_REVIEW" }),
+        ),
+      },
+      { max_open_tasks: 1 },
+    );
+    const result = await connector.poll(cursor);
+    assert.equal(result.batch.records.length, 0);
+    assert.equal(result.next_cursor.includes("task-released"), false);
+    assert.equal(result.next_cursor.includes("pendingRelease"), false);
+  });
+
   it("drops cursor pendingRelease without waiting for the fat pending list", async () => {
     const cursor = {
       value: formatSeenCursor("all", { "task-1": "old", "task-2": "old" }, ["task-1"]),

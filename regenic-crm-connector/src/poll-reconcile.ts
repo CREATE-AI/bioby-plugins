@@ -27,8 +27,8 @@ export async function collectPendingReleases(input: {
   const state = parseSeenCursorState(input.cursor, input.scope);
   return uniqueIds([
     ...state.pendingRelease,
-    ...takeDurableOpenWindowReleases(input.storeKey),
-    ...(input.ledger?.drain() ?? []),
+    ...Array.from(peekDurableOpenWindowReleases(input.storeKey)),
+    ...Array.from(input.ledger?.peek() ?? []),
   ]);
 }
 
@@ -68,9 +68,11 @@ export async function finalizeOpenWindowPoll<T extends { id: string }>(input: {
   selectOpenWindow: typeof import("./reconcile").selectOpenWindow;
   toPollResult: typeof import("./reconcile").toPollResult;
 }) {
+  const preDropSet = new Set(input.preDrop);
+  const listed = input.listed.filter((item) => !preDropSet.has(item.id));
   const seenAfterPreDrop = omitSeenIds(input.seen, input.preDrop);
   const { live, maybeGone, releaseFromSeen } = input.selectOpenWindow(
-    input.listed,
+    listed,
     seenAfterPreDrop,
     input.maxOpen,
     input.occupies,
@@ -85,10 +87,11 @@ export async function finalizeOpenWindowPoll<T extends { id: string }>(input: {
     live: input.toLiveItems(live),
     disappeared: disappeared.map((id) => ({ id })),
   });
-  const stillPending = uniqueIds([
-    ...Array.from(peekDurableOpenWindowReleases(input.storeKey)),
-    ...Array.from(input.ledger?.peek() ?? []),
-  ]);
+  takeDurableOpenWindowReleases(input.storeKey);
+  input.ledger?.drain();
+  const stillPending = uniqueIds(
+    input.preDrop.filter((id) => reconciled.nextSeen[id] !== undefined),
+  );
   const nextCursor = formatSeenCursor(input.scope, reconciled.nextSeen, stillPending);
   return input.toPollResult({
     connectorId: input.connectorId,
