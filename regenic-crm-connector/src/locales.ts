@@ -6,15 +6,13 @@ export const crmLocaleTables = defineLocaleTables({
     "catalog.orderTitle": "CRM order review",
     "catalog.channelLabel": "CRM",
     "catalog.opsDescription":
-      "Private plugin. Pulls email-submit PENDING_REVIEW tasks; DSH decides, the connector completes.",
+      "Private plugin. Pulls in-scope email-submit PENDING_REVIEW tasks. How many run at once is Recipe max concurrent.",
     "catalog.orderDescription":
-      "Private plugin. Pulls orders whose AI internal review is waiting for a human.",
+      "Private plugin. Pulls in-scope orders waiting for human AI review. How many run at once is Recipe max concurrent.",
     "catalog.credentialHint":
       "CRM base URL in the form; REGENIC_CRM_SHARED_SECRET for prod caller auth; REGENIC_CRM_TOKEN optional JWT",
     "field.baseUrl": "CRM base URL",
     "field.baseUrl.placeholder": "https://crm-host/api",
-    "field.maxOpenTasks": "Max open tasks",
-    "field.maxOpenOrders": "Max open order reviews",
     "prereq.secret": "CRM internal shared secret",
     "prereq.secret.hint":
       "Production CRM: same value as INTERNAL_AUTH_REGENIC_SHARED_SECRET. Sent as X-Regenic-Key, not Authorization.",
@@ -35,14 +33,13 @@ export const crmLocaleTables = defineLocaleTables({
     "catalog.orderTitle": "CRM 订单内审",
     "catalog.channelLabel": "CRM",
     "catalog.opsDescription":
-      "私有插件。拉取邮件提报 PENDING_REVIEW 任务；DSH 判断，连接器 complete。",
-    "catalog.orderDescription": "私有插件。拉取 AI 内审待人工的订单。",
+      "私有插件。范围内邮件提报 PENDING_REVIEW 都会同步。同时开跑几条在 Recipe「同时处理」。",
+    "catalog.orderDescription":
+      "私有插件。范围内待人工内审订单都会同步。同时开跑几条在 Recipe「同时处理」。",
     "catalog.credentialHint":
       "表单填 CRM 基址；生产用 REGENIC_CRM_SHARED_SECRET 做调用方鉴权；REGENIC_CRM_TOKEN 可选 JWT",
     "field.baseUrl": "CRM 基址",
     "field.baseUrl.placeholder": "https://crm-host/api",
-    "field.maxOpenTasks": "同时打开任务上限",
-    "field.maxOpenOrders": "同时打开订单内审上限",
     "prereq.secret": "CRM 内部共享密钥",
     "prereq.secret.hint":
       "生产与 INTERNAL_AUTH_REGENIC_SHARED_SECRET 相同。走 X-Regenic-Key，不要放进 Authorization。",

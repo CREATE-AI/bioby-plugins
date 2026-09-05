@@ -20,10 +20,9 @@ function createConnector(routes, extras = {}) {
     {
       connector_id: "crm-ops",
       org_id: "local-owner",
-      max_open_tasks: extras.max_open_tasks ?? 50,
       now: () => "2026-08-26T00:00:00.000Z",
       hideThread: extras.hideThread,
-      findLocallyFinishedIds: extras.findLocallyFinishedIds,
+      openWindowLedger: extras.openWindowLedger,
     },
   );
   return { connector, fetch };
@@ -154,65 +153,47 @@ describe("CrmOpsPollConnector", () => {
     assert.equal(result.next_cursor.includes("task-2"), false);
   });
 
-  it("revises seen pending tasks even when they miss the max_open window", async () => {
+  it("ingests every occupying task on the page including newcomers", async () => {
     const cursor = {
       value: formatSeenCursor("all", { "task-1": "old", "task-2": "old" }),
     };
-    const { connector, fetch } = createConnector(
-      {
-        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
-          items: [
-            sampleOpsTask({ id: "task-2" }),
-            sampleOpsTask({ id: "task-1", nextAction: "STILL_NEED_REVIEW" }),
-            sampleOpsTask({ id: "task-3" }),
-          ],
-        }),
-        "GET /internal/regenic/ops-tasks/task-1": jsonResponse(
-          200,
-          sampleOpsTask({ id: "task-1", nextAction: "STILL_NEED_REVIEW" }),
-        ),
-        "GET /internal/regenic/ops-tasks/task-2": jsonResponse(
-          200,
+    const { connector } = createConnector({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [
           sampleOpsTask({ id: "task-2" }),
-        ),
-      },
-      { max_open_tasks: 1 },
-    );
+          sampleOpsTask({ id: "task-1", nextAction: "STILL_NEED_REVIEW" }),
+          sampleOpsTask({ id: "task-3" }),
+        ],
+      }),
+    });
     const result = await connector.poll(cursor);
     const operations = Object.fromEntries(
       result.batch.records.map((record) => [record.external_id, record.operation]),
     );
     assert.equal(operations["ops_task:task-1:task"], "revise");
     assert.equal(operations["ops_task:task-2:task"], "revise");
-    assert.equal(operations["ops_task:task-3:task"], undefined);
+    assert.equal(operations["ops_task:task-3:task"], "create");
     assert.equal(
       result.batch.records.some((record) => record.operation === "tombstone"),
       false,
     );
-    assert.equal(
-      fetch.calls.some((call) => call.pathname === "/internal/regenic/ops-tasks/task-1"),
-      true,
-    );
     assert.match(result.next_cursor, /"task-1"/);
     assert.match(result.next_cursor, /"task-2"/);
-    assert.equal(result.next_cursor.includes("task-3"), false);
+    assert.match(result.next_cursor, /"task-3"/);
   });
 
-  it("does not ingest an unseen parked task into the open window", async () => {
-    const { connector } = createConnector(
-      {
-        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
-          items: [
-            sampleOpsTask({
-              id: "task-parked",
-              regenicComplete: { action: "LEAVE_PENDING", scene: "REAL_HUMAN" },
-            }),
-            sampleOpsTask({ id: "task-new" }),
-          ],
-        }),
-      },
-      { max_open_tasks: 1 },
-    );
+  it("does not ingest an unseen parked task", async () => {
+    const { connector } = createConnector({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [
+          sampleOpsTask({
+            id: "task-parked",
+            regenicComplete: { action: "LEAVE_PENDING", scene: "REAL_HUMAN" },
+          }),
+          sampleOpsTask({ id: "task-new" }),
+        ],
+      }),
+    });
     const result = await connector.poll(null);
     const ids = result.batch.records.map((record) => record.external_id);
     assert.deepEqual(ids, ["ops_task:task-new:task"]);
@@ -224,20 +205,17 @@ describe("CrmOpsPollConnector", () => {
     const cursor = {
       value: formatSeenCursor("all", { "task-parked": "old" }),
     };
-    const { connector } = createConnector(
-      {
-        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
-          items: [
-            sampleOpsTask({
-              id: "task-parked",
-              regenicComplete: { action: "LEAVE_PENDING", scene: "REAL_HUMAN" },
-            }),
-            sampleOpsTask({ id: "task-new" }),
-          ],
-        }),
-      },
-      { max_open_tasks: 1 },
-    );
+    const { connector } = createConnector({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [
+          sampleOpsTask({
+            id: "task-parked",
+            regenicComplete: { action: "LEAVE_PENDING", scene: "REAL_HUMAN" },
+          }),
+          sampleOpsTask({ id: "task-new" }),
+        ],
+      }),
+    });
     const result = await connector.poll(cursor);
     const operations = Object.fromEntries(
       result.batch.records.map((record) => [record.external_id, record.operation]),
@@ -252,23 +230,20 @@ describe("CrmOpsPollConnector", () => {
     const cursor = {
       value: formatSeenCursor("all", { "task-failed": "old" }),
     };
-    const { connector } = createConnector(
-      {
-        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
-          items: [
-            sampleOpsTask({
-              id: "task-failed",
-              regenicLastAttempt: {
-                action: "SUBMIT_THEN_CLOSE",
-                error: "SUBMIT_THEN_CLOSE requires submit_quote.raw",
-              },
-            }),
-            sampleOpsTask({ id: "task-new" }),
-          ],
-        }),
-      },
-      { max_open_tasks: 1 },
-    );
+    const { connector } = createConnector({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [
+          sampleOpsTask({
+            id: "task-failed",
+            regenicLastAttempt: {
+              action: "SUBMIT_THEN_CLOSE",
+              error: "SUBMIT_THEN_CLOSE requires submit_quote.raw",
+            },
+          }),
+          sampleOpsTask({ id: "task-new" }),
+        ],
+      }),
+    });
     const result = await connector.poll(cursor);
     const operations = Object.fromEntries(
       result.batch.records.map((record) => [record.external_id, record.operation]),
@@ -313,7 +288,7 @@ describe("CrmOpsPollConnector", () => {
           items: [sampleOpsTask(), sampleOpsTask({ id: "task-2" })],
         }),
       },
-      { max_open_tasks: 1, openWindowLedger: ledger },
+      { openWindowLedger: ledger },
     );
     const created = await first.connector.poll(null);
     ledger.release("task-1");
@@ -323,17 +298,17 @@ describe("CrmOpsPollConnector", () => {
           items: [sampleOpsTask({ id: "task-2" }), sampleOpsTask({ id: "task-3" })],
         }),
       },
-      { max_open_tasks: 1, openWindowLedger: ledger },
+      { openWindowLedger: ledger },
     );
     const result = await connector.poll({ value: created.next_cursor });
     const operations = Object.fromEntries(
       result.batch.records.map((record) => [record.external_id, record.operation]),
     );
-    assert.equal(operations["ops_task:task-2:task"], "create");
-    assert.equal(operations["ops_task:task-3:task"], undefined);
+    assert.equal(operations["ops_task:task-2:task"], undefined);
+    assert.equal(operations["ops_task:task-3:task"], "create");
     assert.equal(result.next_cursor.includes("task-1"), false);
     assert.match(result.next_cursor, /"task-2"/);
-    assert.equal(result.next_cursor.includes("task-3"), false);
+    assert.match(result.next_cursor, /"task-3"/);
   });
 
   it("does not re-admit pendingRelease ids from the fat pending list", async () => {
@@ -350,7 +325,6 @@ describe("CrmOpsPollConnector", () => {
           sampleOpsTask({ id: "task-released", nextAction: "NEED_MANUAL_REVIEW" }),
         ),
       },
-      { max_open_tasks: 1 },
     );
     const result = await connector.poll(cursor);
     assert.equal(result.batch.records.length, 0);
@@ -372,7 +346,6 @@ describe("CrmOpsPollConnector", () => {
           sampleOpsTask({ id: "task-2", nextAction: "STILL_NEED_REVIEW" }),
         ),
       },
-      { max_open_tasks: 1 },
     );
     const result = await connector.poll(cursor);
     assert.equal(result.next_cursor.includes("task-1"), false);
@@ -380,30 +353,22 @@ describe("CrmOpsPollConnector", () => {
     assert.equal(result.next_cursor.includes("pendingRelease"), false);
   });
 
-  it("drops seen ids when local work is already finished", async () => {
+  it("pages the pending list and resets listPage when the page is short", async () => {
     const cursor = {
-      value: formatSeenCursor("all", { "task-done": "old", "task-live": "old" }),
+      value: formatSeenCursor("all", {}, [], 1),
     };
-    const { connector } = createConnector(
-      {
-        "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, { items: [] }),
-        "GET /internal/regenic/ops-tasks/task-done": jsonResponse(
-          200,
-          sampleOpsTask({ id: "task-done", nextAction: "NEED_MANUAL_REVIEW" }),
-        ),
-        "GET /internal/regenic/ops-tasks/task-live": jsonResponse(
-          200,
-          sampleOpsTask({ id: "task-live", nextAction: "NEED_MANUAL_REVIEW" }),
-        ),
-      },
-      {
-        findLocallyFinishedIds: async (ids) =>
-          ids.filter((id) => id === "task-done"),
-      },
-    );
+    const { connector, fetch } = createConnector({
+      "GET /internal/regenic/pending-ops-tasks": jsonResponse(200, {
+        items: [sampleOpsTask()],
+      }),
+    });
     const result = await connector.poll(cursor);
-    assert.equal(result.next_cursor.includes("task-done"), false);
-    assert.match(result.next_cursor, /"task-live"/);
+    assert.match(fetch.calls[0].url, /[?&]page=1/);
+    assert.match(fetch.calls[0].url, /[?&]size=100/);
+    const parsed = JSON.parse(result.next_cursor);
+    assert.equal(parsed.v, 3);
+    assert.equal(parsed.listPage, undefined);
+    assert.match(result.next_cursor, /"task-1"/);
   });
 
   it("drops the seen set when token scope changes", async () => {

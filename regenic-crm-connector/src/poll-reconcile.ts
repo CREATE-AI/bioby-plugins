@@ -1,4 +1,4 @@
-import type { ConnectorCursor } from "@regenic/domain";
+import type { ConnectorCursor, IngestRecord } from "@regenic/domain";
 import {
   omitSeenIds,
   peekDurableOpenWindowReleases,
@@ -16,8 +16,6 @@ import type { CrmScope } from "./locators";
 import type { HideThread } from "./list-fold";
 import { foldGoneIds } from "./list-fold";
 
-export type SeenDisposition = "keep" | "drop";
-
 export async function collectPendingReleases(input: {
   cursor: ConnectorCursor | null;
   scope: CrmScope;
@@ -32,19 +30,8 @@ export async function collectPendingReleases(input: {
   ]);
 }
 
-export async function reconcileSeenIds(
-  ids: readonly string[],
-  inspect: (id: string) => Promise<SeenDisposition>,
-): Promise<string[]> {
-  const drop: string[] = [];
-  await Promise.all(
-    ids.map(async (id) => {
-      if ((await inspect(id)) === "drop") {
-        drop.push(id);
-      }
-    }),
-  );
-  return uniqueIds(drop);
+export function nextListPage(page: number, listedLength: number, pageSize: number): number {
+  return listedLength < pageSize ? 0 : page + 1;
 }
 
 export async function finalizeOpenWindowPoll<T extends { id: string }>(input: {
@@ -55,7 +42,9 @@ export async function finalizeOpenWindowPoll<T extends { id: string }>(input: {
   ledger?: OpenWindowLedger;
   preDrop: string[];
   listed: T[];
-  maxOpen: number;
+  listOk: boolean;
+  listPage: number;
+  pageSize: number;
   occupies: (item: T) => boolean;
   skipOccupying: ReadonlySet<string>;
   confirmMaybeGone: (ids: string[]) => Promise<string[]>;
@@ -65,16 +54,38 @@ export async function finalizeOpenWindowPoll<T extends { id: string }>(input: {
   connectorId: string;
   orgId: string;
   receivedAt: string;
-  selectOpenWindow: typeof import("./reconcile").selectOpenWindow;
+  selectListedLive: typeof import("./reconcile").selectListedLive;
   toPollResult: typeof import("./reconcile").toPollResult;
 }) {
+  const finish = (nextSeen: Record<string, string>, records: IngestRecord[], page: number) => {
+    takeDurableOpenWindowReleases(input.storeKey);
+    input.ledger?.drain();
+    const stillPending = uniqueIds(
+      input.preDrop.filter((id) => nextSeen[id] !== undefined),
+    );
+    const nextCursor = formatSeenCursor(input.scope, nextSeen, stillPending, page);
+    return input.toPollResult({
+      connectorId: input.connectorId,
+      orgId: input.orgId,
+      receivedAt: input.receivedAt,
+      cursor: input.cursor?.value,
+      nextCursor,
+      records,
+    });
+  };
+
+  if (!input.listOk) {
+    const nextSeen = omitSeenIds(input.seen, input.preDrop);
+    await foldGoneIds(input.preDrop, input.hideThread, input.foldThreadId);
+    return finish(nextSeen, [], input.listPage);
+  }
+
   const preDropSet = new Set(input.preDrop);
   const listed = input.listed.filter((item) => !preDropSet.has(item.id));
   const seenAfterPreDrop = omitSeenIds(input.seen, input.preDrop);
-  const { live, maybeGone, releaseFromSeen } = input.selectOpenWindow(
+  const { live, maybeGone, releaseFromSeen } = input.selectListedLive(
     listed,
     seenAfterPreDrop,
-    input.maxOpen,
     input.occupies,
     new Set([...input.skipOccupying, ...Array.from(input.ledger?.peek() ?? [])]),
   );
@@ -87,18 +98,9 @@ export async function finalizeOpenWindowPoll<T extends { id: string }>(input: {
     live: input.toLiveItems(live),
     disappeared: disappeared.map((id) => ({ id })),
   });
-  takeDurableOpenWindowReleases(input.storeKey);
-  input.ledger?.drain();
-  const stillPending = uniqueIds(
-    input.preDrop.filter((id) => reconciled.nextSeen[id] !== undefined),
+  return finish(
+    reconciled.nextSeen,
+    reconciled.records,
+    nextListPage(input.listPage, input.listed.length, input.pageSize),
   );
-  const nextCursor = formatSeenCursor(input.scope, reconciled.nextSeen, stillPending);
-  return input.toPollResult({
-    connectorId: input.connectorId,
-    orgId: input.orgId,
-    receivedAt: input.receivedAt,
-    cursor: input.cursor?.value,
-    nextCursor,
-    records: reconciled.records,
-  });
 }
