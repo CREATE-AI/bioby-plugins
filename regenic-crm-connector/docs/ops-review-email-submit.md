@@ -278,13 +278,13 @@ GET /internal/regenic/ops-tasks/{taskId}
 
 ```text
 stream_key = crm:pending-ops:scoped | crm:pending-ops:all
-seen       = 已 ingest 的 crm:ops_task:*（占坑中的待审）
-occupying  = seen 中尚无终端 Regenic 结论、仍占 max_open_tasks 的
+seen       = 已 ingest 的 crm:ops_task:*（去重 / revise / 折页，不是并发窗）
+occupying  = 本页列表里尚无终端 Regenic 结论的
 parked     = 有 regenicComplete（含 LEAVE_PENDING）或 regenicLastAttempt
-live[]     = occupying + 本轮 newcomers（不含 parked）
+live[]     = 本页 occupying + newcomers（不含 parked）
 ```
 
-`max_open_tasks` 只限制 AI 进行中。`seen - live` 且已关单或 parked → 折进「不显示」，事件保留，可在 Hidden 打开。ingest `record.thread.id` 必须是 `ops_task:<id>`（不要带 `crm:`），内核拼完才是 inbox 会话 `crm:ops_task:<id>`；写错会变成 `crm:crm:ops_task:<id>`，「不显示」栏对不上。
+同时开跑几条在 Recipe「同时处理」。`seen` 不在本页的先 GET 确认；已关单或 parked → 折进「不显示」，事件保留，可在 Hidden 打开。ingest `record.thread.id` 必须是 `ops_task:<id>`（不要带 `crm:`），内核拼完才是 inbox 会话 `crm:ops_task:<id>`；写错会变成 `crm:crm:ops_task:<id>`，「不显示」栏对不上。
 
 ---
 

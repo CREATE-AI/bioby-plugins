@@ -14,15 +14,17 @@ export const CRM_STREAM_PACE = {
 } as const;
 
 export interface SeenCursor {
-  v: 1 | 2;
+  v: 1 | 2 | 3;
   scope: CrmScope;
   seen: Record<string, string>;
   pendingRelease?: string[];
+  listPage?: number;
 }
 
 export interface SeenCursorState {
   seen: Record<string, string>;
   pendingRelease: string[];
+  listPage: number;
 }
 
 export interface LiveReconcileItem {
@@ -37,12 +39,16 @@ export function parseSeenCursorState(
   scope: CrmScope,
 ): SeenCursorState {
   if (!cursor?.value) {
-    return { seen: {}, pendingRelease: [] };
+    return { seen: {}, pendingRelease: [], listPage: 0 };
   }
   try {
     const parsed = JSON.parse(cursor.value) as Partial<SeenCursor>;
-    if ((parsed.v !== 1 && parsed.v !== 2) || parsed.scope !== scope || !isObject(parsed.seen)) {
-      return { seen: {}, pendingRelease: [] };
+    if (
+      (parsed.v !== 1 && parsed.v !== 2 && parsed.v !== 3) ||
+      parsed.scope !== scope ||
+      !isObject(parsed.seen)
+    ) {
+      return { seen: {}, pendingRelease: [], listPage: 0 };
     }
     const seen: Record<string, string> = {};
     for (const [id, revision] of Object.entries(parsed.seen)) {
@@ -53,9 +59,13 @@ export function parseSeenCursorState(
     const pendingRelease = Array.isArray(parsed.pendingRelease)
       ? uniquePendingRelease(parsed.pendingRelease)
       : [];
-    return { seen, pendingRelease };
+    const listPage =
+      typeof parsed.listPage === "number" && Number.isInteger(parsed.listPage) && parsed.listPage > 0
+        ? parsed.listPage
+        : 0;
+    return { seen, pendingRelease, listPage };
   } catch {
-    return { seen: {}, pendingRelease: [] };
+    return { seen: {}, pendingRelease: [], listPage: 0 };
   }
 }
 
@@ -70,21 +80,24 @@ export function formatSeenCursor(
   scope: CrmScope,
   seen: Record<string, string>,
   pendingRelease: string[] = [],
+  listPage = 0,
 ): string {
   const pending = uniquePendingRelease(pendingRelease);
+  const page = listPage > 0 ? listPage : 0;
   const cursor: SeenCursor = {
-    v: 2,
+    v: 3,
     scope,
     seen: sortKeys(seen),
     ...(pending.length > 0 ? { pendingRelease: pending } : {}),
+    ...(page > 0 ? { listPage: page } : {}),
   };
   return JSON.stringify(cursor);
 }
 
-export function selectOpenWindow<T extends { id: string }>(
+/** Ingest every occupying row on this page. seen is membership, not a run cap. */
+export function selectListedLive<T extends { id: string }>(
   listed: T[],
   seen: Record<string, string>,
-  maxOpen: number,
   occupies: (item: T) => boolean = () => true,
   skipOccupying: ReadonlySet<string> = new Set(),
 ): { live: T[]; maybeGone: string[]; releaseFromSeen: string[] } {
@@ -94,36 +107,25 @@ export function selectOpenWindow<T extends { id: string }>(
   }
   const maybeGone: string[] = [];
   const releaseFromSeen: string[] = [];
-  const occupyingItems: T[] = [];
-  for (const id of Object.keys(seen)) {
-    const item = listedById.get(id);
-    if (item) {
-      if (skipOccupying.has(id)) {
-        releaseFromSeen.push(id);
-      } else if (occupies(item)) {
-        occupyingItems.push(item);
-      } else {
-        releaseFromSeen.push(id);
-      }
-    } else {
-      maybeGone.push(id);
-    }
-  }
-  const room = Math.max(0, maxOpen - occupyingItems.length);
-  const newcomers: T[] = [];
+  const live: T[] = [];
+  const liveIds = new Set<string>();
   for (const item of listed) {
-    if (seen[item.id] !== undefined) {
+    if (skipOccupying.has(item.id) || !occupies(item)) {
+      if (seen[item.id] !== undefined) {
+        releaseFromSeen.push(item.id);
+      }
       continue;
     }
-    if (!occupies(item)) {
-      continue;
-    }
-    if (newcomers.length >= room) {
-      break;
-    }
-    newcomers.push(item);
+    live.push(item);
+    liveIds.add(item.id);
   }
-  return { live: [...occupyingItems, ...newcomers], maybeGone, releaseFromSeen };
+  for (const id of Object.keys(seen)) {
+    if (skipOccupying.has(id) || liveIds.has(id) || listedById.has(id)) {
+      continue;
+    }
+    maybeGone.push(id);
+  }
+  return { live, maybeGone, releaseFromSeen };
 }
 
 export function reconcileRecords(input: {

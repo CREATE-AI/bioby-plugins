@@ -72,8 +72,7 @@ export function crmProbeCatalog(
   };
 }
 
-export const DEFAULT_MAX_OPEN_TASKS = 50;
-export const DEFAULT_MAX_OPEN_ORDER_REVIEWS = 50;
+export const CRM_LIST_PAGE_SIZE = 100;
 export const CRM_REQUEST_TIMEOUT_ENV = "REGENIC_CRM_REQUEST_TIMEOUT_MS";
 /** Default HTTP deadline. Pending-human lists can exceed 30s on production CRM. */
 export const CRM_REQUEST_TIMEOUT_MS = 120_000;
@@ -545,20 +544,15 @@ export function normalizeCrmBaseUrl(value: string): string {
   return trimmed;
 }
 
-export function crmInstallDetail(
-  config: Record<string, unknown>,
-  maxKey: string,
-  fallbackMax: string,
-): string {
-  const max = configString(config, maxKey) ?? fallbackMax;
+export function crmInstallDetail(config: Record<string, unknown>): string {
   const baseUrl = configString(config, "base_url");
   if (!baseUrl) {
-    return max;
+    return "";
   }
   try {
-    return `${new URL(baseUrl).host} · ${max}`;
+    return new URL(baseUrl).host;
   } catch {
-    return `${baseUrl} · ${max}`;
+    return baseUrl;
   }
 }
 
@@ -708,7 +702,7 @@ function parseOpsTask(value: unknown): CrmOpsTask | undefined {
   };
 }
 
-/** AI already concluded; keep the inbox row, do not count against max_open_tasks. */
+/** AI already concluded; keep the inbox row, do not ingest as live work. */
 export function isOpsWindowParked(task: CrmOpsTask): boolean {
   if (task.regenicComplete?.action?.trim()) {
     return true;

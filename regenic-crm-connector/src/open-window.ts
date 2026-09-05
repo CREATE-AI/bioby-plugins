@@ -1,6 +1,6 @@
 import type { CrmScope } from "./locators";
 
-/** Tracks ids that finished locally and must leave max_open counting immediately. */
+/** Tracks ids released after write-back so the next poll can fold them and not re-ingest. */
 export class OpenWindowLedger {
   private readonly released = new Set<string>();
 
