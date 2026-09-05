@@ -34,6 +34,13 @@ export function nextListPage(page: number, listedLength: number, pageSize: numbe
   return listedLength < pageSize ? 0 : page + 1;
 }
 
+function peekLiveReleases(storeKey: string, ledger?: OpenWindowLedger): string[] {
+  return uniqueIds([
+    ...Array.from(peekDurableOpenWindowReleases(storeKey)),
+    ...Array.from(ledger?.peek() ?? []),
+  ]);
+}
+
 export async function finalizeOpenWindowPoll<T extends { id: string }>(input: {
   cursor: ConnectorCursor | null;
   scope: CrmScope;
@@ -57,13 +64,21 @@ export async function finalizeOpenWindowPoll<T extends { id: string }>(input: {
   selectListedLive: typeof import("./reconcile").selectListedLive;
   toPollResult: typeof import("./reconcile").toPollResult;
 }) {
-  const finish = (nextSeen: Record<string, string>, records: IngestRecord[], page: number) => {
+  const drop = uniqueIds([...input.preDrop, ...peekLiveReleases(input.storeKey, input.ledger)]);
+  const finish = async (nextSeen: Record<string, string>, records: IngestRecord[], page: number) => {
+    const already = new Set(drop);
+    const late = peekLiveReleases(input.storeKey, input.ledger).filter((id) => !already.has(id));
+    const applied = uniqueIds([...drop, ...late]);
+    const seenAfterLate = omitSeenIds(nextSeen, late);
+    if (late.length > 0) {
+      await foldGoneIds(late, input.hideThread, input.foldThreadId);
+    }
     takeDurableOpenWindowReleases(input.storeKey);
     input.ledger?.drain();
     const stillPending = uniqueIds(
-      input.preDrop.filter((id) => nextSeen[id] !== undefined),
+      applied.filter((id) => seenAfterLate[id] !== undefined),
     );
-    const nextCursor = formatSeenCursor(input.scope, nextSeen, stillPending, page);
+    const nextCursor = formatSeenCursor(input.scope, seenAfterLate, stillPending, page);
     return input.toPollResult({
       connectorId: input.connectorId,
       orgId: input.orgId,
@@ -75,21 +90,21 @@ export async function finalizeOpenWindowPoll<T extends { id: string }>(input: {
   };
 
   if (!input.listOk) {
-    const nextSeen = omitSeenIds(input.seen, input.preDrop);
-    await foldGoneIds(input.preDrop, input.hideThread, input.foldThreadId);
+    const nextSeen = omitSeenIds(input.seen, drop);
+    await foldGoneIds(drop, input.hideThread, input.foldThreadId);
     return finish(nextSeen, [], input.listPage);
   }
 
-  const preDropSet = new Set(input.preDrop);
-  const listed = input.listed.filter((item) => !preDropSet.has(item.id));
-  const seenAfterPreDrop = omitSeenIds(input.seen, input.preDrop);
+  const dropSet = new Set(drop);
+  const listed = input.listed.filter((item) => !dropSet.has(item.id));
+  const seenAfterPreDrop = omitSeenIds(input.seen, drop);
   const { live, maybeGone, releaseFromSeen } = input.selectListedLive(
     listed,
     seenAfterPreDrop,
     input.occupies,
-    new Set([...input.skipOccupying, ...Array.from(input.ledger?.peek() ?? [])]),
+    new Set([...input.skipOccupying, ...dropSet]),
   );
-  const dropFromSeen = uniqueIds([...input.preDrop, ...releaseFromSeen]);
+  const dropFromSeen = uniqueIds([...drop, ...releaseFromSeen]);
   const confirmedGone = await input.confirmMaybeGone(maybeGone);
   const disappeared = uniqueIds([...confirmedGone, ...dropFromSeen]);
   await foldGoneIds(disappeared, input.hideThread, input.foldThreadId);

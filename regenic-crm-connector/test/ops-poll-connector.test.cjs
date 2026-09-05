@@ -6,6 +6,8 @@ const {
   CrmOpsPollConnector,
   OpenWindowLedger,
   formatSeenCursor,
+  openWindowStoreKey,
+  rememberOpenWindowRelease,
 } = require("../dist");
 const { createFetch, jsonResponse, sampleOpsTask, surfaceOf } = require("./helpers.cjs");
 
@@ -330,6 +332,35 @@ describe("CrmOpsPollConnector", () => {
     assert.equal(result.batch.records.length, 0);
     assert.equal(result.next_cursor.includes("task-released"), false);
     assert.equal(result.next_cursor.includes("pendingRelease"), false);
+  });
+
+  it("folds releases that arrive while the pending list fails", async () => {
+    const ledger = new OpenWindowLedger();
+    const cursor = {
+      value: formatSeenCursor("all", { "task-1": "old", "task-2": "old", "task-3": "old" }),
+    };
+    const hidden = [];
+    const { connector } = createConnector(
+      {
+        "GET /internal/regenic/pending-ops-tasks": () => {
+          ledger.release("task-1");
+          rememberOpenWindowRelease(openWindowStoreKey("crm-ops", "all", "ops"), "task-3");
+          throw new Error("list unavailable");
+        },
+      },
+      {
+        openWindowLedger: ledger,
+        hideThread: async (threadId) => {
+          hidden.push(threadId);
+        },
+      },
+    );
+    const result = await connector.poll(cursor);
+    assert.equal(result.next_cursor.includes("task-1"), false);
+    assert.match(result.next_cursor, /"task-2"/);
+    assert.equal(result.next_cursor.includes("task-3"), false);
+    assert.equal(result.next_cursor.includes("pendingRelease"), false);
+    assert.deepEqual(hidden.sort(), ["crm:ops_task:task-1", "crm:ops_task:task-3"]);
   });
 
   it("drops cursor pendingRelease without waiting for the fat pending list", async () => {
