@@ -1,0 +1,271 @@
+:root {
+  --bg: #faf7f8;
+  --card: #ffffff;
+  --text: #1f1f1f;
+  --muted: #6b6b6b;
+  --primary: #ff2442;
+  --primary-dark: #e01e3a;
+  --border: #ece7ea;
+  --danger: #c0392b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 380px;
+  margin: 0;
+  padding: 14px;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.subtitle {
+  margin: 4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+textarea,
+input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--primary);
+  color: #fff;
+}
+
+button.primary:hover {
+  background: var(--primary-dark);
+}
+
+button.danger {
+  background: #ffe8ec;
+  color: var(--danger);
+}
+
+button.ghost {
+  background: #f3f3f3;
+  color: var(--text);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.status {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.lead-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.lead-list li {
+  border-top: 1px solid var(--border);
+  padding: 8px 0;
+  font-size: 12px;
+}
+
+.lead-list a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.lead-meta {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.row-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.row-check input {
+  width: auto;
+  margin: 0;
+}
+
+.muted-check {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+
+.tier-high {
+  color: #0a7a3f;
+}
+
+.tier-medium {
+  color: #b86e00;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.tab {
+  flex: 1;
+  background: #f3f3f3;
+  color: var(--text);
+  font-size: 12px;
+  padding: 7px 4px;
+}
+
+.tab.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.lead-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.lead-actions button {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.btn-ok {
+  background: #e8f7ee;
+  color: #0a7a3f;
+}
+
+.btn-no {
+  background: #fdeeee;
+  color: #c0392b;
+}
+
+.btn-reach {
+  display: inline-block;
+  padding: 4px 8px;
+  background: var(--primary);
+  color: #fff !important;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.btn-reach:hover {
+  background: var(--primary-dark);
+}
+
+.ghost-mini {
+  flex: 0 0 auto !important;
+  padding: 4px 8px !important;
+  font-size: 11px !important;
+  background: #f3f3f3;
+  color: var(--text);
+}
+
+.author-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.author-id {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, Consolas, monospace;
+  font-weight: 500;
+}
+
+.badge-qualified { color: #0a7a3f; font-weight: 600; }
+.badge-pending { color: #b86e00; font-weight: 600; }
+.badge-rejected { color: #c0392b; font-weight: 600; }
+
+details.advanced {
+  margin: 8px 0 12px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+details.advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+footer {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
