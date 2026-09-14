@@ -12,15 +12,12 @@ import { CRM_SOURCE, crmScopeOf, opsTaskThreadId } from "./locators";
 import { opsTaskRecord } from "./records";
 import { collectPendingReleases, finalizeOpenWindowPoll } from "./poll-reconcile";
 import {
-  CRM_STREAM_PACE,
   parseSeenCursorState,
   revisionOf,
   selectListedLive,
   toPollResult,
 } from "./reconcile";
 import type { HideThread } from "./list-fold";
-
-export { CRM_STREAM_PACE };
 
 export interface CrmOpsPollConnectorOptions {
   connector_id: string;

@@ -8,11 +8,6 @@ import {
 } from "@regenic/domain";
 import type { CrmScope } from "./locators";
 
-export const CRM_STREAM_PACE = {
-  idle_ms: 30_000,
-  catch_up_pages: 1,
-} as const;
-
 export interface SeenCursor {
   v: 1 | 2 | 3;
   scope: CrmScope;
