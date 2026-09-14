@@ -26,14 +26,14 @@ describe("CRM drivers and plugins", () => {
       org_id: "local-owner",
       connector_type: "crm-ops-review",
       status: "enabled",
-      config: { max_open_tasks: 50 },
+      config: { base_url: "https://crm.internal/api" },
       created_at: "2026-08-26T00:00:00.000Z",
     };
     const order = {
       ...ops,
       id: "order-1",
       connector_type: "crm-order-review",
-      config: { max_open_order_reviews: 50 },
+      config: { base_url: "https://crm.internal/api" },
     };
     const disabled = { ...ops, status: "disabled" };
     assert.equal(
@@ -92,7 +92,7 @@ describe("CRM drivers and plugins", () => {
       crmOpsReviewDriver.install({
         id: "ops-1",
         org_id: "local-owner",
-        config: { base_url: "https://crm.internal/api", max_open_tasks: "50" },
+        config: { base_url: "https://crm.internal/api" },
         now: "2026-08-26T00:00:00.000Z",
       }).credentials_ref,
       "env:REGENIC_CRM_TOKEN",
@@ -103,7 +103,6 @@ describe("CRM drivers and plugins", () => {
         org_id: "local-owner",
         config: {
           base_url: "https://crm.internal/api",
-          max_open_order_reviews: "50",
         },
         now: "2026-08-26T00:00:00.000Z",
       }).credentials_ref,
@@ -155,7 +154,7 @@ describe("CRM drivers and plugins", () => {
       org_id: "local-owner",
       connector_type: "crm-ops-review",
       status: "enabled",
-      config: { base_url: "https://crm.internal/api", max_open_tasks: "50" },
+      config: { base_url: "https://crm.internal/api" },
       created_at: "2026-08-26T00:00:00.000Z",
     };
     const order = {
@@ -164,7 +163,6 @@ describe("CRM drivers and plugins", () => {
       connector_type: "crm-order-review",
       config: {
         base_url: "https://crm.internal/api",
-        max_open_order_reviews: "50",
       },
     };
     const opsPage = await (
@@ -242,7 +240,7 @@ describe("CRM drivers and plugins", () => {
     assert.equal(ops.singleton, true);
     assert.equal(ops.fields[0].key, "base_url");
     assert.equal(ops.fields[0].required, true);
-    assert.equal(ops.fields[1].key, "max_open_tasks");
+    assert.equal(ops.fields.length, 1);
     assert.equal(
       ops.prerequisites.some((item) => item.key === "REGENIC_CRM_BASE_URL"),
       false,
@@ -259,7 +257,7 @@ describe("CRM drivers and plugins", () => {
     assert.equal(order.channel_label, "catalog.channelLabel");
     assert.equal(order.singleton, true);
     assert.equal(order.fields[0].key, "base_url");
-    assert.equal(order.fields[1].key, "max_open_order_reviews");
+    assert.equal(order.fields.length, 1);
     assert.deepEqual(crmOrderReviewDriver.writeBackLabels("REJECTED"), [
       "REJECTED",
       "不通过",
@@ -279,12 +277,11 @@ describe("CRM drivers and plugins", () => {
       status: "enabled",
       config: {
         base_url: "https://crm.internal/api",
-        max_open_tasks: "50",
       },
       created_at: "2026-08-26T00:00:00.000Z",
     }), {
       label: "present.ops",
-      detail: { literal: "crm.internal · 50" },
+      detail: { literal: "crm.internal" },
     });
   });
 
@@ -294,13 +291,11 @@ describe("CRM drivers and plugins", () => {
       org_id: "local-owner",
       config: {
         base_url: "https://crm.internal/api/",
-        max_open_order_reviews: "20",
       },
       now: "2026-08-26T00:00:00.000Z",
     });
     assert.deepEqual(installed.config, {
       base_url: "https://crm.internal/api",
-      max_open_order_reviews: "20",
     });
     assert.equal(installed.credentials_ref, "env:REGENIC_CRM_TOKEN");
     assert.throws(
@@ -308,7 +303,7 @@ describe("CRM drivers and plugins", () => {
         crmOpsReviewDriver.install({
           id: "ops-1",
           org_id: "local-owner",
-          config: { max_open_tasks: "50" },
+          config: {},
           now: "2026-08-26T00:00:00.000Z",
         }),
       (error) =>
@@ -320,7 +315,7 @@ describe("CRM drivers and plugins", () => {
         crmOpsReviewDriver.install({
           id: "ops-1",
           org_id: "local-owner",
-          config: { base_url: "https://crm.internal", max_open_tasks: "50" },
+          config: { base_url: "https://crm.internal" },
           now: "2026-08-26T00:00:00.000Z",
         }),
       (error) =>

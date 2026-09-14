@@ -9,7 +9,8 @@
 | 字段 | 必填 | 作用 |
 |---|---|---|
 | `base_url` | 是 | CRM 内网基址，须含 `/api`，例如 `https://crm-host/api` |
-| `max_open_tasks` / `max_open_order_reviews` | 否 | 同时进行中的 AI 上限，默认 50。邮件提报里 `LEAVE_PENDING` / complete 400 不占坑 |
+
+范围内待审都会同步（分页拉取，每页 100）。同时开跑几条在 Recipe「同时处理」，连接器不再设处理窗口。邮件提报里 `LEAVE_PENDING` / complete 400 不再 ingest。
 
 ## 环境变量
 

@@ -179,7 +179,7 @@ CRM 两层鉴权互不替代：
 | 无 token | 全部待审（内网） |
 | 非法 token | `401`，不得变全量 |
 
-未分配提报运营的任务：只出现在无 token。`max_open_tasks` 默认 50。
+未分配提报运营的任务：只出现在无 token。同时开跑几条在 Recipe「同时处理」。
 
 连接器表单：`base_url` 必填（含 `/api`）。环境变量：生产设 `REGENIC_CRM_SHARED_SECRET`（调用方密钥）；`REGENIC_CRM_TOKEN` 选填（JWT 范围）。不要用启动环境变量指定 CRM 地址。旧安装仅有 `REGENIC_CRM_BASE_URL` 时 sync 仍回退 env；重新保存必须走表单。
 
@@ -187,12 +187,12 @@ CRM 两层鉴权互不替代：
 
 ```text
 stream_key = crm:pending-ops:scoped | crm:pending-ops:all
-seen       = 已 ingest、仍待审的 crm:ops_task:*（含 parked）
-occupying  = seen 中尚无终端 Regenic 结论的，占 max_open_tasks
+seen       = 已 ingest、仍待审的 crm:ops_task:*（去重 / revise / 折页，不是并发窗）
+occupying  = 本页列表里尚无终端 Regenic 结论的
 parked     = 有 regenicComplete（含 LEAVE_PENDING）或 regenicLastAttempt
 ```
 
-`live[]` = occupying + newcomers（**不含** parked）。新的 create，变了 revise，`seen - live` 且已关单或 parked → 折进「不显示」（不 tombstone）。`LEAVE_PENDING` / complete 400 不占窗口。不能只靠列表 cursor 发现「已继续/已关闭」。
+`live[]` = 本页 occupying + newcomers（**不含** parked）。新的 create，变了 revise，`seen` 不在本页的先 GET 确认，已关单或 parked → 折进「不显示」（不 tombstone）。并发上限在 Recipe「同时处理」。列表按页拉取（`page` + `size=100`）。`LEAVE_PENDING` / complete 400 不再 ingest。不能只靠列表 cursor 发现「已继续/已关闭」。列表失败时只落盘 `pendingRelease`，不得把空列表当成全部已关。
 
 ### 10.3 CRM 接口（须配合改）
 
@@ -369,7 +369,7 @@ P0 解决「任务卡住，**DSH 判完**后连接器自动让 CRM 回邮/提报
 
 `ProjectField` 上 AI 内审 = 待人工，且 **不是** 自动内审 `IN_PROGRESS`。
 
-范围与 P0 相同：有 token → `reportingOperationsUserId` = 该账号；无 token → 全部（内网）。未分配提报运营只出现在无 token。`max_open_order_reviews` 单独上限，默认 50，不占用 ops 的 `max_open_tasks`。
+范围与 P0 相同：有 token → `reportingOperationsUserId` = 该账号；无 token → 全部（内网）。未分配提报运营只出现在无 token。订单队列与运营队列各自 sync，并发上限各自看 Recipe「同时处理」。
 
 ### 16.3 工单怎么来（连接器不「建单」）
 

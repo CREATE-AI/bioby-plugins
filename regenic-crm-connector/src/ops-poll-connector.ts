@@ -1,99 +1,69 @@
 import type { ConnectorCursor, PollResult } from "@regenic/domain";
 import {
+  CRM_LIST_PAGE_SIZE,
   CrmApiError,
-  DEFAULT_MAX_OPEN_TASKS,
   occupiesOpsWindow,
   type CrmClient,
   type CrmOpsTask,
   isEmailSubmitPending,
 } from "./crm-client";
-import { foldGoneIds, type HideThread } from "./list-fold";
-import {
-  OpenWindowLedger,
-  openWindowStoreKey,
-  uniqueIds,
-} from "./open-window";
+import { uniqueIds, type OpenWindowLedger, openWindowStoreKey } from "./open-window";
 import { CRM_SOURCE, crmScopeOf, opsTaskThreadId } from "./locators";
 import { opsTaskRecord } from "./records";
-import {
-  collectPendingReleases,
-  finalizeOpenWindowPoll,
-  reconcileSeenIds,
-} from "./poll-reconcile";
+import { collectPendingReleases, finalizeOpenWindowPoll } from "./poll-reconcile";
 import {
   CRM_STREAM_PACE,
   parseSeenCursorState,
   revisionOf,
-  selectOpenWindow,
+  selectListedLive,
   toPollResult,
 } from "./reconcile";
+import type { HideThread } from "./list-fold";
 
 export { CRM_STREAM_PACE };
 
 export interface CrmOpsPollConnectorOptions {
   connector_id: string;
   org_id: string;
-  max_open_tasks?: number;
   now?: () => string;
   hideThread?: HideThread;
   openWindowLedger?: OpenWindowLedger;
-  findLocallyFinishedIds?: (ids: readonly string[]) => Promise<string[]>;
 }
 
 export class CrmOpsPollConnector {
   readonly source = CRM_SOURCE;
-  private readonly maxOpen: number;
   private readonly now: () => string;
 
   constructor(
     private readonly client: CrmClient,
     private readonly options: CrmOpsPollConnectorOptions,
   ) {
-    this.maxOpen = options.max_open_tasks ?? DEFAULT_MAX_OPEN_TASKS;
-    if (!Number.isInteger(this.maxOpen) || this.maxOpen < 1) {
-      throw new Error("max_open_tasks must be a positive integer");
-    }
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
   async poll(cursor: ConnectorCursor | null): Promise<PollResult> {
     const scope = crmScopeOf(this.client.hasToken);
     const storeKey = openWindowStoreKey(this.options.connector_id, scope, "ops");
-    const { seen } = parseSeenCursorState(cursor, scope);
+    const { seen, listPage } = parseSeenCursorState(cursor, scope);
     const pendingRelease = await collectPendingReleases({
       cursor,
       scope,
       storeKey,
       ledger: this.options.openWindowLedger,
     });
-    const seenDrop = await reconcileSeenIds(Object.keys(seen), async (id) => {
-      try {
-        const task = await this.client.getOpsTask(id);
-        if (!isEmailSubmitPending(task) || !occupiesOpsWindow(task)) {
-          return "drop";
-        }
-        return "keep";
-      } catch (error) {
-        if (error instanceof CrmApiError && (error.status === 404 || error.status === 409)) {
-          return "drop";
-        }
-        throw error;
-      }
-    });
-    const localDrop =
-      (await this.options.findLocallyFinishedIds?.(Object.keys(seen))) ?? [];
-    const preDrop = uniqueIds([...pendingRelease, ...seenDrop, ...localDrop]);
+    const preDrop = uniqueIds(pendingRelease);
     let listed: CrmOpsTask[] = [];
+    let listOk = false;
     try {
       listed = await this.client.listPendingOpsTasks({
-        page: 0,
-        size: Math.max(this.maxOpen * 2, 100),
+        page: listPage,
+        size: CRM_LIST_PAGE_SIZE,
       });
+      listOk = true;
     } catch (error) {
       if (error instanceof CrmApiError && error.status === 401) {
         throw error;
       }
-      // Keep reconciling seen slots when the fat list is slow or times out.
     }
     return finalizeOpenWindowPoll({
       cursor,
@@ -103,7 +73,9 @@ export class CrmOpsPollConnector {
       ledger: this.options.openWindowLedger,
       preDrop,
       listed,
-      maxOpen: this.maxOpen,
+      listOk,
+      listPage,
+      pageSize: CRM_LIST_PAGE_SIZE,
       occupies: occupiesOpsWindow,
       skipOccupying: new Set(preDrop),
       confirmMaybeGone: (ids) => this.confirmGone(ids),
@@ -122,7 +94,7 @@ export class CrmOpsPollConnector {
       connectorId: this.options.connector_id,
       orgId: this.options.org_id,
       receivedAt: this.now(),
-      selectOpenWindow,
+      selectListedLive,
       toPollResult,
     });
   }

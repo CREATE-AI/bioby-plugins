@@ -14,7 +14,6 @@ import { CRM_STREAM_PACE, CrmOpsPollConnector } from "./ops-poll-connector";
 export interface CrmOpsReviewPluginConfig {
   installation_id: string;
   org_id: string;
-  max_open_tasks?: number;
   base_url?: string;
   credentials_ref?: string;
   env?: NodeJS.ProcessEnv;
@@ -22,13 +21,11 @@ export interface CrmOpsReviewPluginConfig {
   now?: () => string;
   hideThread?: HideThread;
   openWindowLedger?: OpenWindowLedger;
-  findLocallyFinishedIds?: (ids: readonly string[]) => Promise<string[]>;
 }
 
 export interface CrmOrderReviewPluginConfig {
   installation_id: string;
   org_id: string;
-  max_open_order_reviews?: number;
   base_url?: string;
   credentials_ref?: string;
   env?: NodeJS.ProcessEnv;
@@ -36,7 +33,6 @@ export interface CrmOrderReviewPluginConfig {
   now?: () => string;
   hideThread?: HideThread;
   openWindowLedger?: OpenWindowLedger;
-  findLocallyFinishedIds?: (ids: readonly string[]) => Promise<string[]>;
 }
 
 export const crmOpsReviewPlugin = definePlugin<CrmOpsReviewPluginConfig>({
@@ -54,11 +50,9 @@ export const crmOpsReviewPlugin = definePlugin<CrmOpsReviewPluginConfig>({
       {
         connector_id: config.installation_id,
         org_id: config.org_id,
-        max_open_tasks: config.max_open_tasks,
         now: config.now,
         hideThread: config.hideThread,
         openWindowLedger: config.openWindowLedger,
-        findLocallyFinishedIds: config.findLocallyFinishedIds,
       },
     );
     const scope = crmScopeOf(crmHasToken(env, config.credentials_ref));
@@ -88,11 +82,9 @@ export const crmOrderReviewPlugin = definePlugin<CrmOrderReviewPluginConfig>({
       {
         connector_id: config.installation_id,
         org_id: config.org_id,
-        max_open_order_reviews: config.max_open_order_reviews,
         now: config.now,
         hideThread: config.hideThread,
         openWindowLedger: config.openWindowLedger,
-        findLocallyFinishedIds: config.findLocallyFinishedIds,
       },
     );
     const scope = crmScopeOf(crmHasToken(env, config.credentials_ref));

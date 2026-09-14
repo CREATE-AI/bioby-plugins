@@ -6,15 +6,12 @@ import {
   type ChannelDriver,
   type ConnectorHost,
   type ConnectorInstallation,
-  type ConversationThread,
   type JsonValue,
   type NewConnectorInstallation,
-  type ResolveStreamsOptions,
   type SyncSource,
 } from "@regenic/domain";
 import {
   CRM_TOKEN_ENV,
-  configNumber,
   configString,
   crmCatalogFields,
   crmCatalogPrerequisites,
@@ -22,7 +19,6 @@ import {
   crmHasToken,
   crmInstallDetail,
   crmProbeCatalog,
-  DEFAULT_MAX_OPEN_ORDER_REVIEWS,
   mapCrmError,
   requireCrmBaseUrl,
   type CrmFetch,
@@ -36,12 +32,10 @@ import {
   orderStreamKey,
   writeBackLabels,
 } from "./locators";
-import { readCrmOpenWindowPollHooks } from "./open-window-poll-hooks";
 import { crmLocaleTables } from "./locales";
 import { crmOrderReviewPlugin } from "./plugin";
 import { answerOrderPrompt, listOrderPrompts } from "./prompts";
 import { orderConversationLabel } from "./records";
-import { releaseThreadFromOpenWindow } from "./release-open-window";
 import { createCrmOrderSyncSource } from "./sync-source";
 import {
   OpenWindowLedger,
@@ -49,14 +43,7 @@ import {
   releaseOrderOpenWindow,
 } from "./open-window";
 
-export type CrmOrderReviewDriver = ChannelDriver & {
-  releaseOpenWindow(
-    installation: ConnectorInstallation,
-    thread: ConversationThread,
-    host: ConnectorHost,
-    env: NodeJS.ProcessEnv,
-  ): Promise<void>;
-};
+export type CrmOrderReviewDriver = ChannelDriver;
 
 export const crmOrderReviewDriver: CrmOrderReviewDriver = {
   connector_type: ORDER_CONNECTOR_TYPE,
@@ -100,13 +87,8 @@ export const crmOrderReviewDriver: CrmOrderReviewDriver = {
     };
   },
 
-  async resolveStreams(installation, host, env, options) {
-    const hooks = readCrmOpenWindowPollHooks(options);
-    return [
-      await mountOrderStream(host, installation, env, {
-        findLocallyFinishedIds: hooks.findLocallyFinishedIds,
-      }),
-    ];
+  async resolveStreams(installation, host, env) {
+    return [await mountOrderStream(host, installation, env)];
   },
 
   async bindSyncSource(installation, _host, env): Promise<SyncSource> {
@@ -134,15 +116,7 @@ export const crmOrderReviewDriver: CrmOrderReviewDriver = {
       description: "catalog.orderDescription",
       credential_hint: "catalog.credentialHint",
       singleton: true,
-      fields: crmCatalogFields([
-        {
-          key: "max_open_order_reviews",
-          label: "field.maxOpenOrders",
-          required: false,
-          default: "50",
-          placeholder: "50",
-        },
-      ]),
+      fields: crmCatalogFields(),
       prerequisites: crmCatalogPrerequisites(),
     };
   },
@@ -153,7 +127,7 @@ export const crmOrderReviewDriver: CrmOrderReviewDriver = {
     return {
       label: "present.order",
       detail: {
-        literal: crmInstallDetail(installation.config, "max_open_order_reviews", "50"),
+        literal: crmInstallDetail(installation.config),
       },
     };
   },
@@ -238,26 +212,13 @@ export const crmOrderReviewDriver: CrmOrderReviewDriver = {
       mapCrmError(error, "send");
     }
   },
-
-  async releaseOpenWindow(installation, thread, host, env) {
-    releaseThreadFromOpenWindow(installation.id, crmScopeOf(crmHasToken(env, installation.credentials_ref)), thread, host, env);
-  },
 };
 
 export function orderInstallConfig(
   config: Record<string, unknown>,
 ): Record<string, JsonValue> {
-  const max =
-    configNumber(config, "max_open_order_reviews") ?? DEFAULT_MAX_OPEN_ORDER_REVIEWS;
-  if (!Number.isInteger(max) || max < 1) {
-    throw new ChannelDriverError(
-      "invalid_config",
-      "max_open_order_reviews must be a positive integer",
-    );
-  }
   return {
     base_url: requireCrmBaseUrl(config),
-    max_open_order_reviews: String(max),
   };
 }
 
@@ -268,7 +229,6 @@ export async function mountOrderStream(
   extras: {
     fetch?: CrmFetch;
     now?: () => string;
-    findLocallyFinishedIds?: (ids: readonly string[]) => Promise<string[]>;
   } = {},
 ) {
   const scope = crmScopeOf(crmHasToken(env, installation.credentials_ref));
@@ -279,14 +239,12 @@ export async function mountOrderStream(
     await host.plugin(crmOrderReviewPlugin, {
       installation_id: installation.id,
       org_id: installation.org_id,
-      max_open_order_reviews: configNumber(installation.config, "max_open_order_reviews"),
       base_url: configString(installation.config, "base_url"),
       credentials_ref: installation.credentials_ref,
       env,
       fetch: extras.fetch,
       now: extras.now,
       openWindowLedger,
-      findLocallyFinishedIds: extras.findLocallyFinishedIds,
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);

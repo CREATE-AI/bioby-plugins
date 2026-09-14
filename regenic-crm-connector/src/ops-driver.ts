@@ -6,15 +6,12 @@ import {
   type ChannelDriver,
   type ConnectorHost,
   type ConnectorInstallation,
-  type ConversationThread,
   type JsonValue,
   type NewConnectorInstallation,
-  type ResolveStreamsOptions,
   type SyncSource,
 } from "@regenic/domain";
 import {
   CRM_TOKEN_ENV,
-  configNumber,
   configString,
   crmCatalogFields,
   crmCatalogPrerequisites,
@@ -22,7 +19,6 @@ import {
   crmHasToken,
   crmInstallDetail,
   crmProbeCatalog,
-  DEFAULT_MAX_OPEN_TASKS,
   mapCrmError,
   requireCrmBaseUrl,
   type CrmFetch,
@@ -36,12 +32,10 @@ import {
   opsStreamKey,
   writeBackLabels,
 } from "./locators";
-import { readCrmOpenWindowPollHooks } from "./open-window-poll-hooks";
 import { crmLocaleTables } from "./locales";
 import { answerOpsPrompt, listOpsPrompts } from "./prompts";
 import { crmOpsReviewPlugin } from "./plugin";
 import { opsConversationLabel } from "./records";
-import { releaseThreadFromOpenWindow } from "./release-open-window";
 import { createCrmOpsSyncSource } from "./sync-source";
 import {
   OpenWindowLedger,
@@ -49,14 +43,7 @@ import {
   releaseOpsOpenWindow,
 } from "./open-window";
 
-export type CrmOpsReviewDriver = ChannelDriver & {
-  releaseOpenWindow(
-    installation: ConnectorInstallation,
-    thread: ConversationThread,
-    host: ConnectorHost,
-    env: NodeJS.ProcessEnv,
-  ): Promise<void>;
-};
+export type CrmOpsReviewDriver = ChannelDriver;
 
 export const crmOpsReviewDriver: CrmOpsReviewDriver = {
   connector_type: OPS_CONNECTOR_TYPE,
@@ -100,13 +87,8 @@ export const crmOpsReviewDriver: CrmOpsReviewDriver = {
     };
   },
 
-  async resolveStreams(installation, host, env, options) {
-    const hooks = readCrmOpenWindowPollHooks(options);
-    return [
-      await mountOpsStream(host, installation, env, {
-        findLocallyFinishedIds: hooks.findLocallyFinishedIds,
-      }),
-    ];
+  async resolveStreams(installation, host, env) {
+    return [await mountOpsStream(host, installation, env)];
   },
 
   async bindSyncSource(installation, _host, env): Promise<SyncSource> {
@@ -134,15 +116,7 @@ export const crmOpsReviewDriver: CrmOpsReviewDriver = {
       description: "catalog.opsDescription",
       credential_hint: "catalog.credentialHint",
       singleton: true,
-      fields: crmCatalogFields([
-        {
-          key: "max_open_tasks",
-          label: "field.maxOpenTasks",
-          required: false,
-          default: "50",
-          placeholder: "50",
-        },
-      ]),
+      fields: crmCatalogFields(),
       prerequisites: crmCatalogPrerequisites(),
     };
   },
@@ -152,7 +126,7 @@ export const crmOpsReviewDriver: CrmOpsReviewDriver = {
   presentInstall(installation) {
     return {
       label: "present.ops",
-      detail: { literal: crmInstallDetail(installation.config, "max_open_tasks", "50") },
+      detail: { literal: crmInstallDetail(installation.config) },
     };
   },
 
@@ -231,22 +205,13 @@ export const crmOpsReviewDriver: CrmOpsReviewDriver = {
       mapCrmError(error, "send");
     }
   },
-
-  async releaseOpenWindow(installation, thread, host, env) {
-    releaseThreadFromOpenWindow(installation.id, crmScopeOf(crmHasToken(env, installation.credentials_ref)), thread, host, env);
-  },
 };
 
 export function opsInstallConfig(
   config: Record<string, unknown>,
 ): Record<string, JsonValue> {
-  const max = configNumber(config, "max_open_tasks") ?? DEFAULT_MAX_OPEN_TASKS;
-  if (!Number.isInteger(max) || max < 1) {
-    throw new ChannelDriverError("invalid_config", "max_open_tasks must be a positive integer");
-  }
   return {
     base_url: requireCrmBaseUrl(config),
-    max_open_tasks: String(max),
   };
 }
 
@@ -257,7 +222,6 @@ export async function mountOpsStream(
   extras: {
     fetch?: CrmFetch;
     now?: () => string;
-    findLocallyFinishedIds?: (ids: readonly string[]) => Promise<string[]>;
   } = {},
 ) {
   const scope = crmScopeOf(crmHasToken(env, installation.credentials_ref));
@@ -268,14 +232,12 @@ export async function mountOpsStream(
     await host.plugin(crmOpsReviewPlugin, {
       installation_id: installation.id,
       org_id: installation.org_id,
-      max_open_tasks: configNumber(installation.config, "max_open_tasks"),
       base_url: configString(installation.config, "base_url"),
       credentials_ref: installation.credentials_ref,
       env,
       fetch: extras.fetch,
       now: extras.now,
       openWindowLedger,
-      findLocallyFinishedIds: extras.findLocallyFinishedIds,
     });
   }
   return requireConnectorStream(host.get("connectors"), installation.id, streamKey);
