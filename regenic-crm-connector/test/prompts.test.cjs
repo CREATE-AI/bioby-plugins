@@ -33,6 +33,14 @@ describe("CRM prompts", () => {
       }),
       undefined,
     );
+    assert.equal(
+      extractOpsHumanReason({
+        prompt_id: "crm:ops:task-1",
+        answers: [{ id: "decision", selected: ["REAL_HUMAN"] }],
+        comment: "报价在附件，正文无数，核不出。",
+      }),
+      "报价在附件，正文无数，核不出。",
+    );
   });
 
   it("lists only the actions allowed by reviewGuide", async () => {
@@ -192,6 +200,28 @@ describe("CRM prompts", () => {
       fetch.calls.some((call) => call.pathname.includes("/internal-review")),
       false,
     );
+  });
+
+  it("writes the prompt comment back to CRM when leaving for a human", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
+      "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(204),
+    });
+    const result = await answerOpsPrompt(
+      new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+      "ops_task:task-1",
+      {
+        prompt_id: "crm:ops:task-1",
+        answers: [{ id: "decision", selected: ["REAL_HUMAN"] }],
+        comment: "报价在附件，正文无数，核不出。",
+      },
+    );
+    assert.equal(result.accepted, true);
+    const body = JSON.parse(fetch.calls.at(-1).body);
+    assert.equal(body.action, "LEAVE_PENDING");
+    assert.equal(body.scene, "REAL_HUMAN");
+    assert.equal(body.comment, "报价在附件，正文无数，核不出。");
+    assert.equal(body.comment.startsWith("source=regenic"), false);
   });
 
   it("writes the DSH why line back as comment when leaving for a human", async () => {

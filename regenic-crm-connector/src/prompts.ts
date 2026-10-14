@@ -320,8 +320,12 @@ function promptText(answer: PromptAnswer, fallback: string): string {
 
 const WHY_PREFIX = /^(?:why|原因)\s*[:：]\s*/i;
 
-/** DSH 第二行 / `why:` 后的人话。CRM 转人工标签和飞书用这句，不要带 `source=regenic`。 */
+/** 内核 `comment`、或 DSH 第二行 / `why:` 后的人话。CRM 转人工标签和飞书用这句，不要带 `source=regenic`。 */
 export function extractOpsHumanReason(answer: PromptAnswer): string | undefined {
+  const fromField = usefulComment(answer.comment);
+  if (fromField) {
+    return fromField.replace(WHY_PREFIX, "").trim() || undefined;
+  }
   for (const blob of answer.answers.flatMap((item) => [
     ...item.selected,
     ...(item.custom ? [item.custom] : []),
@@ -332,6 +336,14 @@ export function extractOpsHumanReason(answer: PromptAnswer): string | undefined 
     }
   }
   return undefined;
+}
+
+function usefulComment(value: string | undefined): string | undefined {
+  const text = value?.trim();
+  if (!text || text.toLowerCase().startsWith("source=regenic")) {
+    return undefined;
+  }
+  return text;
 }
 
 function opsCompleteComment(input: {
