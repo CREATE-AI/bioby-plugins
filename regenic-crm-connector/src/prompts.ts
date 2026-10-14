@@ -38,11 +38,12 @@ export function opsTaskPrompt(task: CrmOpsTask): ThreadPrompt {
     title: "邮件提报待审",
     detail:
       task.reviewGuide.headline ??
-      "工单正文已含最近来信和往来摘要。根据正文选出第一行 scene 键。不要打开收件箱，不要二次拉取邮件。",
+      "工单正文已含最近来信和往来摘要。第一行写 scene 键；REAL_HUMAN 时第二行写转真人原因。不要打开收件箱，不要二次拉取邮件。",
     questions: [
       {
         id: "decision",
-        prompt: "根据工单正文（最近来信 + 往来摘要）选出 scene 键写在第一行。不要打开收件箱。",
+        prompt:
+          "根据工单正文（最近来信 + 往来摘要）选出 scene 键写在第一行。REAL_HUMAN 时第二行写给运营看的转真人原因。不要打开收件箱。",
         options,
       },
     ],
@@ -99,7 +100,7 @@ function sceneDescription(scene: string): string {
     case "QUOTE_UNPARSED_RANGE":
       return "报价是区间，按最高价提报后关单";
     case "REAL_HUMAN":
-      return "不发信、不关单，留待真人";
+      return "不发信、不关单，留待真人。第二行写转人工原因，会写回 CRM";
     case "NO_FOLLOW":
       return "无需跟进，不发信直接关单";
     case "NOT_OUTREACH":
@@ -203,11 +204,11 @@ export async function answerOpsPrompt(
     accepted = await client.completeOpsTask(taskId, {
       action: conclusion.action,
       scene: conclusion.scene,
-      comment: auditComment({
-        queue: "ops",
+      comment: opsCompleteComment({
+        action: conclusion.action,
+        answer,
         hasToken: client.hasToken,
         reportingOperationsUserId: task.reportingOperationsUserId,
-        promptText: promptText(answer, conclusion.action),
       }),
     });
   } finally {
@@ -226,11 +227,12 @@ function parseOpsConclusion(answer: PromptAnswer): {
     ...(decision?.custom ? [decision.custom] : []),
   ];
   for (const token of tokens) {
-    const action = parseOpsCompleteAction(token);
+    const head = conclusionHead(token);
+    const action = parseOpsCompleteAction(head);
     if (action) {
       return { action };
     }
-    const scene = parseOpsScene(token);
+    const scene = parseOpsScene(head);
     if (scene) {
       const mapped = actionForScene(scene);
       if (mapped) {
@@ -314,4 +316,65 @@ function promptText(answer: PromptAnswer, fallback: string): string {
     .map((item) => item.custom?.trim())
     .find((item) => item);
   return custom || fallback;
+}
+
+const WHY_PREFIX = /^(?:why|原因)\s*[:：]\s*/i;
+
+/** DSH 第二行 / `why:` 后的人话。CRM 转人工标签和飞书用这句，不要带 `source=regenic`。 */
+export function extractOpsHumanReason(answer: PromptAnswer): string | undefined {
+  for (const blob of answer.answers.flatMap((item) => [
+    ...item.selected,
+    ...(item.custom ? [item.custom] : []),
+  ])) {
+    const reason = reasonFromConclusion(blob);
+    if (reason) {
+      return reason;
+    }
+  }
+  return undefined;
+}
+
+function opsCompleteComment(input: {
+  action: OpsCompleteAction;
+  answer: PromptAnswer;
+  hasToken: boolean;
+  reportingOperationsUserId?: string;
+}): string {
+  const reason = extractOpsHumanReason(input.answer);
+  if (input.action === "LEAVE_PENDING" && reason) {
+    return reason;
+  }
+  return auditComment({
+    queue: "ops",
+    hasToken: input.hasToken,
+    reportingOperationsUserId: input.reportingOperationsUserId,
+    promptText: reason || promptText(input.answer, input.action),
+  });
+}
+
+function conclusionHead(value: string): string {
+  return value.trim().split(/\r?\n/, 1)[0]?.trim() ?? "";
+}
+
+function reasonFromConclusion(text: string): string | undefined {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return undefined;
+  }
+  const first = lines[0] ?? "";
+  const keyed = Boolean(parseOpsCompleteAction(first) || parseOpsScene(first));
+  const body = (keyed ? lines.slice(1) : lines).join("\n").replace(WHY_PREFIX, "").trim();
+  if (!body) {
+    return undefined;
+  }
+  if (parseOpsCompleteAction(body) || parseOpsScene(body)) {
+    return undefined;
+  }
+  if (body.toLowerCase().startsWith("source=regenic")) {
+    return undefined;
+  }
+  return body;
 }

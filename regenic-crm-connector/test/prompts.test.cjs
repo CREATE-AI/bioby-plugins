@@ -5,12 +5,36 @@ const {
   CrmClient,
   answerOpsPrompt,
   answerOrderPrompt,
+  extractOpsHumanReason,
   listOpsPrompts,
   listOrderPrompts,
 } = require("../dist");
 const { createFetch, jsonResponse, sampleOpsTask, sampleOrder } = require("./helpers.cjs");
 
 describe("CRM prompts", () => {
+  it("extracts the why line after a scene key", () => {
+    assert.equal(
+      extractOpsHumanReason({
+        prompt_id: "crm:ops:task-1",
+        answers: [
+          {
+            id: "decision",
+            selected: ["REAL_HUMAN"],
+            custom: "REAL_HUMAN\nwhy: 报价在附件，正文无数，核不出。",
+          },
+        ],
+      }),
+      "报价在附件，正文无数，核不出。",
+    );
+    assert.equal(
+      extractOpsHumanReason({
+        prompt_id: "crm:ops:task-1",
+        answers: [{ id: "decision", selected: ["REAL_HUMAN"] }],
+      }),
+      undefined,
+    );
+  });
+
   it("lists only the actions allowed by reviewGuide", async () => {
     const fetch = createFetch({
       "GET /internal/regenic/ops-tasks/task-1": jsonResponse(
@@ -46,6 +70,7 @@ describe("CRM prompts", () => {
     assert.equal(labels.includes("SUBMIT_THEN_CLOSE"), false);
     assert.equal(labels.includes("LEAVE_PENDING"), false);
     assert.equal(labels.includes("CLOSE_ONLY"), false);
+    assert.match(prompts[0].questions[0].prompt, /转真人原因/);
     const generic = prompts[0].questions[0].options.find(
       (option) => option.label === "NEED_QUOTE_GENERIC",
     );
@@ -167,6 +192,52 @@ describe("CRM prompts", () => {
       fetch.calls.some((call) => call.pathname.includes("/internal-review")),
       false,
     );
+  });
+
+  it("writes the DSH why line back as comment when leaving for a human", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
+      "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(204),
+    });
+    const result = await answerOpsPrompt(
+      new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+      "ops_task:task-1",
+      {
+        prompt_id: "crm:ops:task-1",
+        answers: [
+          {
+            id: "decision",
+            selected: ["REAL_HUMAN"],
+            custom: "REAL_HUMAN\nwhy: 报价在附件，正文无数，核不出。",
+          },
+        ],
+      },
+    );
+    assert.equal(result.accepted, true);
+    const body = JSON.parse(fetch.calls.at(-1).body);
+    assert.equal(body.action, "LEAVE_PENDING");
+    assert.equal(body.scene, "REAL_HUMAN");
+    assert.equal(body.comment, "报价在附件，正文无数，核不出。");
+    assert.equal(body.comment.startsWith("source=regenic"), false);
+  });
+
+  it("keeps the audit comment when REAL_HUMAN has no why line", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/ops-tasks/task-1": jsonResponse(200, sampleOpsTask()),
+      "POST /internal/regenic/ops-tasks/task-1/complete": jsonResponse(204),
+    });
+    await answerOpsPrompt(
+      new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+      "ops_task:task-1",
+      {
+        prompt_id: "crm:ops:task-1",
+        answers: [{ id: "decision", selected: ["REAL_HUMAN"] }],
+      },
+    );
+    const body = JSON.parse(fetch.calls.at(-1).body);
+    assert.equal(body.action, "LEAVE_PENDING");
+    assert.equal(body.scene, "REAL_HUMAN");
+    assert.match(body.comment, /source=regenic/);
   });
 
   it("maps a scene key on the first line to the CRM action", async () => {
