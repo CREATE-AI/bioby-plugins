@@ -319,6 +319,27 @@ describe("CRM prompts", () => {
     );
   });
 
+  it("writes the DSH comment as order internal-review comment", async () => {
+    const fetch = createFetch({
+      "GET /internal/regenic/orders/pf-1": jsonResponse(200, sampleOrder()),
+      "POST /internal/regenic/orders/pf-1/internal-review": jsonResponse(204),
+    });
+    const result = await answerOrderPrompt(
+      new CrmClient({ baseUrl: "https://crm.internal", fetch }),
+      "order:pf-1",
+      {
+        prompt_id: "crm:audit:pf-1",
+        answers: [{ id: "decision", selected: ["REJECTED"] }],
+        comment: "拒绝合作。平台语言未达标。",
+      },
+    );
+    assert.equal(result.accepted, true);
+    const body = JSON.parse(fetch.calls.at(-1).body);
+    assert.equal(body.result, "REJECTED");
+    assert.equal(body.comment, "拒绝合作。平台语言未达标。");
+    assert.equal(body.comment.startsWith("source=regenic"), false);
+  });
+
   it("writes order internal-review without completing an ops task", async () => {
     const fetch = createFetch({
       "GET /internal/regenic/orders/pf-1": jsonResponse(200, sampleOrder()),

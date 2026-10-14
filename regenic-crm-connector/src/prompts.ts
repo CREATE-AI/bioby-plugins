@@ -277,11 +277,11 @@ export async function answerOrderPrompt(
   try {
     accepted = await client.submitOrderInternalReview(orderId, {
       result,
-      comment: auditComment({
-        queue: "order",
+      comment: orderInternalReviewComment({
+        answer,
+        result,
         hasToken: client.hasToken,
         reportingOperationsUserId: order.reportingOperationsUserId,
-        promptText: promptText(answer, result),
       }),
     });
   } finally {
@@ -320,7 +320,7 @@ function promptText(answer: PromptAnswer, fallback: string): string {
 
 const WHY_PREFIX = /^(?:why|原因)\s*[:：]\s*/i;
 
-/** 内核 `comment`、或 DSH 第二行 / `why:` 后的人话。CRM 转人工标签和飞书用这句，不要带 `source=regenic`。 */
+/** 内核 `comment`、或 DSH 第二行 / `why:` 后的人话。订单内审写进项目进度 AI 内审摘要；转人工写进 CRM 标签/飞书。不要带 `source=regenic`。 */
 export function extractOpsHumanReason(answer: PromptAnswer): string | undefined {
   const fromField = usefulComment(answer.comment);
   if (fromField) {
@@ -344,6 +344,24 @@ function usefulComment(value: string | undefined): string | undefined {
     return undefined;
   }
   return text;
+}
+
+function orderInternalReviewComment(input: {
+  answer: PromptAnswer;
+  result: OrderReviewResult;
+  hasToken: boolean;
+  reportingOperationsUserId?: string;
+}): string {
+  const reason = extractOpsHumanReason(input.answer);
+  if (reason) {
+    return reason;
+  }
+  return auditComment({
+    queue: "order",
+    hasToken: input.hasToken,
+    reportingOperationsUserId: input.reportingOperationsUserId,
+    promptText: promptText(input.answer, input.result),
+  });
 }
 
 function opsCompleteComment(input: {
@@ -377,12 +395,14 @@ function reasonFromConclusion(text: string): string | undefined {
     return undefined;
   }
   const first = lines[0] ?? "";
-  const keyed = Boolean(parseOpsCompleteAction(first) || parseOpsScene(first));
+  const keyed = Boolean(
+    parseOpsCompleteAction(first) || parseOpsScene(first) || parseOrderReviewResult(first),
+  );
   const body = (keyed ? lines.slice(1) : lines).join("\n").replace(WHY_PREFIX, "").trim();
   if (!body) {
     return undefined;
   }
-  if (parseOpsCompleteAction(body) || parseOpsScene(body)) {
+  if (parseOpsCompleteAction(body) || parseOpsScene(body) || parseOrderReviewResult(body)) {
     return undefined;
   }
   if (body.toLowerCase().startsWith("source=regenic")) {
