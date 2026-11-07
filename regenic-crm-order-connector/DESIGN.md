@@ -1,0 +1,316 @@
+# CRM 订单同步连接器
+
+- **状态：** 已按本文实现，代码在本目录
+- **仓库：** `bioby-plugins`
+- **目录：** `regenic-crm-order-connector/`
+- **包名：** `@bioby/regenic-crm-order-connector`
+- **和现有插件的关系：** 同仓库里的 `regenic-crm-connector` 继续管「邮件提报待审」和「订单 AI 内审」。AI 内审的会话是 `crm:order:<订单id>`，本插件不往那条里写。交付订单时间线用另一条会话 `crm-delivery:<订单id>`。安装配置各自一份。
+
+本文先把做法写清楚。代码按本文做进 `regenic-crm-order-connector/`，不放进 `regenic` 仓库。
+
+---
+
+## 结论
+
+一张未结束的交付订单，在 Regenic 里是一条会话，会话 id 是 `crm-delivery:<订单id>`。它和 AI 内审的 `crm:order:<订单id>` 是两条，列表里各看各的。会话按时间从早到晚排，每一步有固定编号。第一次安装时把符合条件的订单整段补齐。之后按第 6 节的节奏再看这些订单，只追加新发生的事；同一步内容变了就改这一步。要给人看的通知单独成一步，正文开头写明是给客户还是给运营。
+
+已经定的几件事：
+
+1. **已放弃**（`ABANDONED`）算结束，不进同步。
+2. **已暂停**就是 `PROJECT_DELAYED_OR_PAUSED`（项目延期/暂停）。
+3. 给客户的话只写在转人工那一次。句子先用决策事项里的 `scriptTemplate`（`party` 记成运营也算），没有再用 `party` 为客户时的 `lead`，再没有用订单上 `bargainTerms.sharedScene` 对应的砍价页句子。没有转人工标记，不因为场景码单独写一条。只有运营说明、没有 `scriptTemplate` 的交接，不写给客户。
+4. 转人工以订单上的 `deliveryHumanReviewNeeded` 为准，不依赖变更日志。交付状态用订单文档上的当前值。只有标记时间或话术变了，才追加通知。
+
+---
+
+## 1. 要做什么
+
+CRM 后端是 `bioby-email`，订单在 MongoDB 的 `project_fields`。前端 `bioby-work` 的订单详情用来看邮件和跟进。本连接器不走 CRM 的 HTTP 接口，直接读库。
+
+做完之后：
+
+1. 安装时填 MongoDB 连接，地址可改，密码不进普通配置。
+2. 第一次把还在交付中的订单收进来，每张订单变成一条会话。
+3. 会话里按时间放：订单上下文、邮件往来、跟进记录、变更日志。有要通知的，再加带前缀的通知。
+4. 之后按第 6 节更新未结束订单。目录每一页放行几张可配置。
+5. 订单进入结束状态后，会话里留下一条结束记录，以后不再拉这张单。
+
+本连接器只读。不改订单、不写 `project_field_change_logs`、不发邮件、不发飞书。
+
+---
+
+## 2. 不做什么
+
+- 不替代 `regenic-crm-connector`。那个插件用 CRM HTTP，拉待审任务和待人工内审，并能写回。
+- 不把公开的 `regenic` 仓库改成默认带上这个包。
+- 不在连接器里判断「这单该怎么回达人」。判断仍在 CRM。这里只把已经发生的事和已经写好的话收成会话。
+- 不把详情页那种「只留最近几条」的截断照搬过来。详情页给手机看，会话要能按时间对照。
+
+---
+
+## 3. 读哪些表
+
+连接只读。库名、连接串在安装时配置。用到的集合：
+
+| 集合 | 干什么 |
+| --- | --- |
+| `project_fields` | 订单本身。交付状态在 `selectedWorkflow.status` |
+| `projects` | 订单上下文：项目名、brief、权益、产品信息、需求 |
+| `emailInbox` | 这张订单的往来邮件 |
+| `project_field_change_logs` | 订单变更日志，按 `projectFieldId` 查 |
+| `delivery_decision_items` | 决策事项。给客户/运营的话在 `askJson` 里 |
+
+订单上下文对照 `DeliveryOrderAgentInboxHistoryAssembler` 放进信封的 `projectOrderContext`：`projectName`、`briefUrl`、`briefType`、`briefText`、`benefits`、`brandProjectInfo`、`brandProjectInfoEnglish`、`demands`。再加上这张订单自己的达人昵称、平台、链接、对外报价、达人报价、合作权益、当前交付状态。服务费只出现在给运营看的步骤里，不写进给客户的通知。
+
+邮件对照订单详情页的「邮件和跟进」，查询方式和 `InfluencerCampaignReplyLookup.loadThread` 相同，再按 `DecisionContextLoader.thisOrder` 滤到这张单：
+
+- 先按项目、活动、达人查，文件夹只含 `INBOX`、`SPAM`、`SENT`。`SENT` 是我们发的，`INBOX` 和 `SPAM` 都是达人回的。
+- 邮件上有 `projectFieldId` 时必须等于这张单；没有时才看是不是同一个 `campaignId`。
+- 详情页判断用的邮件最多 10 封、跟进最多 8 条。会话不按这个截断。第一次按时间分几页写完。
+- 增量检查用邮件 `sentDate` 或 `updatedTime` 晚于这张订单的水位，不把历史再全读一遍。
+
+跟进在 `selectedWorkflow.followUpRecords`，和邮件排在同一条时间线上。内容以「发送跟进邮件」或「已发送下单邮件」开头的，编号用 `<订单id>:note-auto-<正文指纹>`。当时还没有真实邮件，就留下。后来出现了 `INBOX` / `SPAM` / `SENT` 里的真邮件，对已经写过的这些自动备注发 `tombstone`，会话里不再留。
+
+变更日志用 `project_field_change_logs`：`logTime`、`changeType`（`UPDATE` / `ROLLBACK` / `OPERATION`）、`operatorName`、`reason`、`changes[]`。它只是过程的一部分。CRM 写日志失败时只打警告，转人工标记和一部分巡检字段是直接改 `project_fields`，不会进这张表。每次检查都读订单文档上的当前状态、`updatedTime`、转人工标记、`bargainTerms.sharedScene`。日志里没有、但订单上的状态或标记和这张订单游标里上次看到的不一样，就按订单上的 `updatedTime` 补一条步骤。
+
+---
+
+## 4. 哪些订单要同步
+
+初始化和之后的定时更新用同一份状态名单。这样不会先收进一张单，下一次又把它丢掉。
+
+**要同步**（`selectedWorkflow.status`）：
+
+| 状态 | 页面上的意思 |
+| --- | --- |
+| `TO_FOLLOW_UP` | 待跟进 |
+| `FOLLOWING` | 跟进中 |
+| `NEGOTIATING` | 谈判中 |
+| `BARGAINING` | 砍价中 |
+| `WAITING_DRAFT` | 等待草稿 |
+| `WAITING_ADDRESS` | 等待地址 |
+| `WAITING_SCRIPT` | 等待脚本 |
+| `WAITING_TRACKING_NUMBER` | 等待快递单号 |
+| `WAITING_LOGISTICS_DELIVERY` | 等待物流送达 |
+| `SCRIPT_REVIEWING` | 脚本审核中 |
+| `SCRIPT_REVISING` | 脚本修改中 |
+| `VIDEO_DRAFT_REVIEWING` | 视频草稿审核 |
+| `VIDEO_DRAFT_REVISING` | 视频草稿修改中 |
+| `LONG_TERM_NO_REPLY` | 长期不回邮件 |
+| `PENDING_PUBLISH` | 待发布 |
+| `PUBLISHED` | 已发布 |
+| `ABNORMAL_HANDLING` | 异常处理 |
+
+**不同步：**
+
+| 状态 | 页面上的意思 |
+| --- | --- |
+| `SETTLED_COMPLETED` | 已结清 |
+| `COMPLETED` | 已完结 |
+| `CANCELLED` | 已取消 |
+| `CUSTOMER_CANCELLED` | 客户取消 |
+| `ABANDONED` | 已放弃 |
+| `PROJECT_DELAYED_OR_PAUSED` | 项目延期/暂停，也就是已暂停 |
+| `CUSTOMER_HOLD` | 客户 Hold |
+
+`isDeleted` 为 true 的不收。没有 `selectedWorkflow.status` 的不收。
+
+CRM 自己的「未结束」（`CrmEndedStatuses`）把客户 Hold 还算在里面，已发布也算在里面。这里按上面的表，客户 Hold 不收，已发布要收。付款提成里的 `SETTLED`（已结算）不是交付状态，不拿来过滤。
+
+查询按 `_id` 翻页，条件就是未删除加上表里的状态。不要用 `viewFlags.inDeliveryView` 代替状态。那个标记和状态可能不一致。
+
+`listDirectory` 按这个条件投影 `_id`。本轮还没翻完时，只把见过的 id 记在这一轮的 cursor 里，不和上一轮比。翻到一半就比，后面还没扫到的未结束订单会被收成结束。上一轮交出去的未结束 id 记在连接器进程里。目录收尾时内核会清掉 `listDirectory` 的 cursor，所以不要把上一轮名单放在那个 cursor 里。翻完再和进程里的上一轮名单比：
+
+- 多出来的 id 是新订单。按第 6 节一页一页交给内核，每页最多 `sync_concurrency` 张。
+- 少了的 id 先留在目录里。这张订单自己的拉取按 `_id` 再读订单本身，不要只查仍未结束的。状态已经进排除名单，或 `isDeleted` 为 true：写一条结束步骤。本轮目录收尾时不再交这个 id，内核把它从目录拿掉。会话里已经写下的历史留着。
+- 还在名单里的，由这张订单的拉取做增量检查。
+
+结束步骤的编号是 `<订单id>:end-<新状态>-<紧凑的 updatedTime>`。时间格式见第 5.1 节，不带冒号。已经写过再读到，按同一编号跳过。会话里已有的历史留着。
+
+---
+
+## 5. 会话怎么排
+
+对照 GitHub Actions 的一次运行来理解，不是去接 GitHub。
+
+GitHub Actions 里，一次运行是一条时间线。每一步有固定名字、开始时间、结论。同一步再跑，只改这一步的结论。新发生的事追加在后面。要人看的提示单独挂一条，不混进步骤正文里。
+
+这里同样：
+
+| GitHub Actions | 本连接器 |
+| --- | --- |
+| 一次运行 | 一张订单，一条会话 |
+| 步骤名字 | 步骤编号，写进 `external_id`，终身不变 |
+| 步骤日志 | 这一条的正文 |
+| 开始时间 | 这件事发生的时间。会话里从早到晚排 |
+| 同一步结论变了 | 用 `revise` 改这一条 |
+| 新的一步 | 用 `create` 追加 |
+| 标在运行上的提示 | 单独一条通知，正文带前缀 |
+
+会话 id 是 `crm-delivery:<订单id>`。`source` 用 `crm-delivery`，不使用内审那条的 `crm`。内核按 `external_id` 最后一个冒号前面的那段拼出来源，得到会话 id。每条记录的 `external_id` 写成 `<订单id>:<这一步>`，这一步里面不要再出现冒号。同一张订单的步骤因此都在 `crm-delivery:<订单id>`。不会进入 `crm:order:<订单id>`。
+
+列表标题用达人昵称和项目名，例如「小明 · 某品牌春季」。能力声明 `list_title: "conversation"`，每条记录带 `conversation_label`。`unit_kind` 用 `crm-delivery.order`，词表里的中文是「交付订单」。同一张订单的每条记录都盖这个类型。AI 内审仍用它自己的类型 `crm.order_review` 和标题「项目名 · AI 内审待人工」。
+
+能力只开同步。不回复、不在 Regenic 里新建 CRM 订单。
+
+### 5.1 有哪些步骤
+
+时间都用这件事自己的时间，不用这次拉取的时间。`occurred_at` 仍是带时区的 ISO 时间，供会话排序。同一秒里把次序写进毫秒：订单上下文 +0，邮件从 +1 起按邮件顺序加，然后跟进、变更日志、通知、本轮小结继续往后加。展示只看这个时间。
+
+编号里凡是要写时间，都用紧凑格式 `yyyyMMddHHmmssSSS`，例如 `20261106175000123`。不要冒号、减号、小数点。`occurred_at` 仍用 ISO，只有编号用紧凑格式。内核只把 `external_id` 最后一个冒号前面的部分当成会话 id。步骤里再出现冒号，这一步就会离开 `crm-delivery:<订单id>`。
+
+| 步骤 | 编号（`external_id`） | 时间 | 谁说的 |
+| --- | --- | --- | --- |
+| 订单上下文 | `<订单id>:context` | 订单 `createdTime`。项目后来改了 brief / 权益 / 需求，不改这条，另起一条 `<订单id>:context-<紧凑的项目更新时间>` | 系统 |
+| 一封邮件 | `<订单id>:mail-<邮件id>` | 邮件 `sentDate` | 达人回的记用户，我们发出的记助手 |
+| 一条跟进 | `<订单id>:note-<紧凑的跟进时间>-<跟进人>-<正文短指纹>` | `followTime` | 系统。跟进没有自己的 id。正文变了指纹会变，见 5.2：作废旧编号再写新的，不留两条 |
+| 一条变更 | `<订单id>:log-<日志id>` | `logTime` | 系统。正文写操作人、原因、每个字段的旧值到新值 |
+| 一条通知 | `<订单id>:notice-<紧凑的来源时间>-<给谁>` | 和触发它的那条变更或决策事项同一时刻，排在那条后面 | 系统 |
+
+冒号只留在订单 id 和这一步之间。邮件 id、日志 id、跟进人接在步骤名后面用短横线。跟进人名字里若有冒号，先去掉。编号不要以 `order:` 开头，那是 AI 内审的前缀。
+
+邮件正文变了（同一封信被改过）才 `revise` 邮件那一步。变更日志一般不改；回滚是新的一条 `ROLLBACK` 日志，追加，不去改旧日志那一步。
+
+### 5.2 对照更新
+
+内核按 `source + external_id` 认同一条。正文没变再交一次，会当成已经收过。正文变了但没标 `revise`，会被拒。所以：
+
+- 第一次见到这个编号：`create`
+- 编号已有、正文变了：`revise`
+- 编号已有、正文没变：这一轮不要再交
+
+步骤指纹放在这张订单自己的拉取游标里：编号 → 短指纹，再加上次看到的交付状态、转人工标记时间、水位。不存正文，不存密码。一张订单几十步，游标是几 KB。`listDirectory` 的 cursor 只存本轮翻页位置和本轮已经见过的订单 id，不存步骤指纹，也不存上一轮名单。不要把所有订单的指纹塞进一条游标。
+
+对照：
+
+- 编号第一次出现：`create`
+- 编号还在、指纹变了：`revise`（邮件正文被改过就是这种）
+- 编号还在、指纹没变：不要再交
+- 跟进：游标里有一条「同一跟进时间 + 同一跟进人」、但指纹变了的旧编号时，对旧编号发 `tombstone`，再 `create` 新编号。不把改过的跟进留成两条。
+- 自动备注：真邮件出现后，对 `note-auto-` 编号发 `tombstone`
+
+会话展示按 `occurred_at` 从早到晚。不要按详情页那样把新的放在最上面。
+
+---
+
+## 6. 第一次同步和之后的更新
+
+内核大约每 45 秒向目录要一页（环境变量 `REGENIC_CATALOG_PULL_MS`，最短 15 秒，最长 120 秒），一次要一页。单次订单拉取默认大约 20 秒。一次拉取只处理一张订单的一页，不在一次里读完所有订单。
+
+登记和拉取分开：
+
+1. **目录**用 `bindSyncSource` 的 `listDirectory`。不要做一条 key 叫 `catalog` 的流，也不要在 `resolveStreams` 里读游标或放行订单。`resolveStreams` 返回空列表。
+2. **某一张订单**用 `resolveThreadStream`。内核用目录里的 `stream_key` 还原会话再来拉。`stream_key` 和 `thread_id` 都写成 `crm-delivery:<订单id>`。写成 `delivery:<订单id>` 时，内核还原不出会话，这张单不会被拉。
+
+`listDirectory` 每一页最多交 `sync_concurrency` 张订单（默认 4）。每张带 `stream_key`、`thread_id`。`label` 能取到就用「昵称 · 项目名」，取不到先用订单 id。本轮 `_id` 还没翻完，或本轮要交的 id 还没交完：`complete` 为 false，`next_cursor` 记下翻页位置和本轮已经见过的 id。不要设 `replaces`。设了的话，内核会把这一页当成整个目录，还没翻到的订单会被丢掉。
+
+本轮第一页也要 `complete: false`，哪怕未结束订单不超过一页。这样内核才会把这一轮当成新的一轮。最后一页才 `complete: true`，只补上还没交过的未结束订单。已经结束、或这一轮没再出现的 id，不要放进这一轮的任何一页。它们留在上一轮的目录里，拉取还在。结束步骤写完之前不要发这页收尾。拉取写完后在进程里标一下，再发 `complete: true`。进程重启后这个标记是空的：先至少等一个订单拉取间隔（大约 2 分钟），让还留在目录里的订单被拉到一次（结束的会在那次写上结束步骤，编号相同，不会多一条），再收尾。收尾之后内核把少了的订单从目录拿掉，并清掉这张单的拉取游标；会话里已经写下的历史还在。
+
+订单拉取的 `pace.idle_ms` 写成 `refresh_interval_ms`（默认 180000），不要再加一段偏移。内核拉最近消息这一路时，会把间隔收到大约 2 分钟。人没在操作时，一张已登记的订单大约每 2 分钟检查一次。把偏移加进每一次的 `idle_ms`，也拉不开这个间隔。人正在用 Regenic 时，内核先拉当前打开的会话，其它订单先跳过，空下来再补。连接器不另开定时器。
+
+第一次没有水位：按时间把上下文、邮件、跟进、日志、通知补完。一页写不完就 `has_more`，内核继续拉这张，补完才开始算间隔。
+
+以后每次只做增量，并且一定再读订单和所属项目：
+
+- 按 `_id` 读 `project_fields`（状态、转人工标记、`bargainTerms.sharedScene`、跟进记录、`updatedTime`）
+- 按 `projectId` 读 `projects`。brief、权益、需求、产品信息的指纹变了，就追加一条 `context-<紧凑时间>`。订单文档没动也要读项目
+- 这张订单水位之后的 `emailInbox`、`project_field_change_logs`、`delivery_decision_items`
+- 订单上的状态和游标不一致时：这一轮日志里已经有 `selectedWorkflow.status` 的新旧值，就只保留日志那一条。日志没有这次变化，才补一条状态步骤
+
+单次增量应在 1 秒内。各张订单按 id 查询。`poll` 里不要再排队等读库名额。名额只是目录每一页交出去的张数。某张订单查询失败就让这次拉取失败，水位不动。内核大约 10 秒后再叫这一张，然后间隔加倍，最长大约 5 分钟。不要为了等名额把别的订单也做成失败。Node 里是同时发几路查询，不是再开一组操作系统线程。
+
+某一张订单查询失败：只失败这一张，水位不推进。目录这一页连不上库：这一轮的 cursor 停住，已经登记的订单仍按自己的间隔拉；库本身断了，那些拉取也失败，按同样的间隔再试。
+
+`refresh_interval_ms` 和 `sync_concurrency` 都在安装表单里，改配置不清各张订单的水位。库慢就把每一页的张数改小，或把环境里的 `REGENIC_CONNECTOR_POLL_TIMEOUT_MS` 加大。这个超时是整个 Regenic 进程的，不是本插件独有。
+
+---
+
+## 7. 通知前缀
+
+有的步骤只是记录经过。有的步骤表示还要人去发一句话，或还要运营处理。后一种单独追加一条，正文第一行是前缀：
+
+| 要谁处理 | 前缀 | 从哪看出来 |
+| --- | --- | --- |
+| 客户 | `[给客户]` | 决策事项有 `scriptTemplate`，或 `party` 是 `CUSTOMER`，或转人工时能从场景码拼出给客户的话 |
+| 运营 | `[给运营]` | `askJson.party` 是 `OPS`，或事项在等运营（`waitingOn` 为 `OPS` / `OPS_REVIEW`），或订单 `deliveryHumanReviewNeeded` 为 true 且处理人是运营 |
+| 达人 | 不加这种通知 | 达人已经收到的信就是邮件那一步。不要把已发邮件再抄成一条通知 |
+
+一条事情两边都要看，就写两条，编号里的「给谁」不同。给客户的那条只放能发给客户的话，不放服务费、内部原因、达人报价流水。给运营的那条可以写原因、处理人、订单详情路径。
+
+给客户的话只在第 7.1 节说的那次转人工里写入。砍价中已经有 `bargainTerms.sharedScene`、但 `deliveryHumanReviewNeeded` 不是 true，不单开一条 `[给客户]`。
+
+真要写的时候，按这个顺序拼句子，不重新做「该不该转人工」的判断：
+
+1. 决策事项里有 `scriptTemplate`：不管 `askJson.party` 记的是客户还是运营，都用这句。跟进里「确认合作、档期满、还要信息」这类事项，party 记的是运营，但这句话就是要发给客户的。按 `CustomerScript` 把 `{price}`、`{platform}`、`{benefits}`、`{scope}` 换成事项里已经裁好的事实。
+2. 没有 `scriptTemplate`，且 `party` 是 `CUSTOMER`：用 `lead`。`party` 是 `OPS` 时不用 `lead`，那是给运营看的交接，不是给客户的话。
+3. 上面没有句子，且订单 `bargainTerms.sharedScene` 有值：用和 `SharedReplyLetters.customerScript` 同一张句子表，按这个场景码取那一段。场景码是 CRM 写在订单上的，句子表照抄，不在连接器里重判场景。
+4. 上面都没有句子：不写空的 `[给客户]`。缺项目、来回重复这类只有运营说明的交接，不编一句给客户。
+
+给运营的说明用事项的 `reason`、`hint`、`questionText`，以及订单上的 `deliveryHumanReviewHint`、`deliveryHumanReviewReason`。连接器不发飞书。
+
+### 7.1 转人工
+
+转人工的权威是订单文档上的标记，不是变更日志。CRM 打标时直接更新 `project_fields`，交付状态经常仍是跟进中、砍价中。字段：
+
+- `deliveryHumanReviewNeeded`
+- `deliveryHumanReviewReason`
+- `deliveryHumanReviewHint`
+- `deliveryHumanReviewHandler`（`DECISION_ENGINE` / `DECISION_WAITING_OPS` / `OPS`）
+- `deliveryHumanReviewNeededAt`
+
+每次检查先读这些字段和 `selectedWorkflow.status`，再看水位之后的日志和事项。
+
+1. 订单上的状态和游标里上次的状态不同：这一轮的变更日志里若已有字段 `selectedWorkflow.status`，只保留那条日志，正文写变完之后的状态，不再另写状态步骤。日志没有这次变化，才补一条，编号 `<订单id>:status-<紧凑的 updatedTime>-<新状态>`。
+2. `deliveryHumanReviewNeeded` 为 true，且 `deliveryHumanReviewNeededAt` 与游标里上次的标记时间不同（或上次没有）：这是一次新的转人工。按第 7 节能拼出给客户的话，就追加 `[给客户]`，编号 `<订单id>:notice-<紧凑的标记时间>-customer`。需要运营处理就追加 `[给运营]`，编号用同一个紧凑时间，后缀 `-ops`。标记时间相同则跳过，下次检查不要再写一条。没有转人工标记时，不因为 `sharedScene` 单独写给客户的通知。
+3. 这次转人工还在（标记时间没变），话术指纹变了（场景码或 `scriptTemplate`）：对原来的通知编号 `revise`，不另起一条。
+4. 标记被清掉：把对应通知 `tombstone`。交付状态若没变，不编一条假的状态变更。
+5. 不写「本轮小结」。交付状态已经有状态步骤。已经写过的 `summary-` 作废，不再补新的。
+
+转人工但两处都拼不出给客户的话：只写给运营的通知（有原因或 hint 时）和状态步骤（状态确实变了时）。不写空的 `[给客户]`。
+
+---
+
+## 8. 安装配置
+
+| 字段 | 放哪 | 默认 | 作用 |
+| --- | --- | --- | --- |
+| `mongo_uri` | 钥匙串 | 无，必填 | MongoDB 连接串 |
+| `mongo_db` | 普通配置 | 连接串里的库名 | 库名 |
+| `refresh_interval_ms` | 普通配置 | `180000` | 同一张订单两次检查的间隔 |
+| `sync_concurrency` | 普通配置 | `4` | `listDirectory` 每一页最多交几张订单 |
+| `selection` | 普通配置 | 没填时按 `all` | `pick` 自己选，`recent` 按提报时间取最新，`all` 全部还在交付的 |
+| `order_ids` | 普通配置 | 无 | `selection` 为 `pick` 时要同步的订单 id。表单里按达人昵称、项目名称、达人链接搜 |
+| `recent_limit` | 普通配置 | `30` | `selection` 为 `recent` 时取多少张。只含还在交付的，按 `submitWorkflow.submitTime` 从新到旧，最多 200 |
+
+`mongo_uri` 标成 secret。落库的安装配置里不留连接串。已经装过、配置里没有 `selection` 的，继续同步全部还在交付的订单，不会改成只同步最新的。选「全部」时安装表单会先让人确认。自选名单里只列出还在交付的订单；一张订单后来结清或取消，就按原来的结束记录离开目录。
+
+跑这个插件的 Regenic 进程必须能直接连上 CRM 的 MongoDB。装在运营自己的电脑上、网络到不了生产库时，安装探测失败，不开始同步。现有的 AI 内审插件走 CRM 的 HTTP，不要求这台机器能连数据库。这个交付订单插件要连库，所以要装在能访问该库的那台 Regenic 上。
+
+插件清单沿用本仓库另一个 CRM 插件的样子：`regenic.plugin`、`connector_protocol` 省略即 `1.0`、`contributes.drivers` 只点一个驱动。驱动名 `crmDeliverySyncDriver`，`connector_type` 为 `crm-delivery-sync`，`source` 为 `crm-delivery`。`matchesThread` 只认 `crm-delivery:<订单id>`。不认 `crm:order:<订单id>`，也不认邮件提报那条 `crm:ops_task:<任务id>`。
+
+加载方式和现有私有插件一样，用 `REGENIC_PLUGIN_DIR` 指到 `bioby-plugins`，或用 `REGENIC_CHANNEL_PLUGIN` 指到本目录。公开引擎不会自己带上这个包。
+
+---
+
+## 9. 失败时怎样
+
+- 连接串非法：安装直接失败。
+- 某一张订单缺项目、缺邮件：这张单仍然建会话。有的步骤就写有的，缺的不编空邮件。
+- 单张订单查询失败：不推进这张单的水位。内核大约 10 秒后再叫，之后间隔加倍，最长大约 5 分钟。不要把「等放行名额」也当成失败。
+- 目录这一页连不上库：这一轮的 cursor 停在上次成功的位置。已经登记的订单仍按自己的间隔再试；库断了那些拉取也失败，间隔同上。
+
+---
+
+## 10. 怎样算做完
+
+- 装上之后，名单里的订单各有一条 `crm-delivery:<订单id>` 会话，标题是达人加项目。AI 内审的 `crm:order:<订单id>` 里没有这些步骤。
+- 会话里从早到晚能看到：订单上下文、往来邮件（含 SPAM）、跟进、变更日志。同一秒里通知在对应变更的后面。
+- 改一封已同步邮件的正文，下一次只改那一条。改一条跟进的正文，旧的那条作废，只留新的。
+- 先只有「发送跟进邮件」备注、后来来了真邮件：备注从会话里去掉。
+- 新进入待跟进的订单，目录下一页把它交出去之后出现会话。
+- 把订单改成已结清、已完结、已取消、客户取消、已放弃、项目延期/暂停、客户 Hold 之后，有一条结束记录。这条记录由该订单自己的拉取在目录收尾前写下，之后目录不再包含它。
+- 只打转人工标记、交付状态没变、也没有变更日志：仍出现给运营的通知。标记还在、并且事项或 `bargainTerms.sharedScene` 能拼出给客户的话时，有一条 `[给客户]`。只有场景码、没有转人工标记：没有这条通知。标记时间不变时，下次检查不会再多一条。
+- 日志里已经有状态变化时，会话里只有日志那一条，没有第二条重复的状态步骤。
+- 项目 brief 改了、订单文档没改：下一轮增量后出现一条新的上下文。
+- 人没在操作时，每张已登记的订单大约每 2 分钟检查一次。内核会把 `refresh_interval_ms` 收到这个长度。人正在操作时，当前会话优先，其它订单可以更晚，空下来再补。
+- 第一次补历史时，目录每一页新交出去的订单不超过 `sync_concurrency`。内核大约每 45 秒要一页。步骤指纹在各张订单自己的游标里。编号里的时间不带冒号，会话 id 仍是 `crm-delivery:<订单id>`。

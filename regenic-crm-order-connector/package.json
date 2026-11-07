@@ -1,0 +1,37 @@
+{
+  "name": "@bioby/regenic-crm-order-connector",
+  "version": "0.0.0",
+  "private": true,
+  "regenic": {
+    "plugin": true,
+    "id": "@bioby/regenic-crm-order-connector",
+    "displayName": "CRM 交付订单",
+    "engines": { "regenic": "1.0" },
+    "contributes": {
+      "drivers": ["crmDeliverySyncDriver"]
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "link:regenic": "node scripts/link-regenic.cjs",
+    "build": "node scripts/link-regenic.cjs && tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.cjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@regenic/domain": "file:../../regenic/packages/domain",
+    "@regenic/plugin-host": "file:../../regenic/packages/plugin-host",
+    "mongodb": "^6.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,144 @@
+import type { SyncDirectoryMember, SyncDirectoryPage } from "@regenic/domain";
+import { RESTART_WAIT_MS, streamKey, threadId } from "./locators";
+import type { OpenOrderHead } from "./model";
+
+export interface DirectoryCursor {
+  v: 1;
+  afterId: string | null;
+  seen: string[];
+  emitted: string[];
+  scanDone: boolean;
+}
+
+export interface DirectoryMemory {
+  previousIds: string[] | null;
+  endWritten: Set<string>;
+  startedAt: number;
+}
+
+export function freshDirectoryMemory(now = Date.now()): DirectoryMemory {
+  return { previousIds: null, endWritten: new Set(), startedAt: now };
+}
+
+let memory = freshDirectoryMemory();
+
+export function directoryMemory(): DirectoryMemory {
+  return memory;
+}
+
+export function resetDirectoryMemory(now = Date.now()): void {
+  memory = freshDirectoryMemory(now);
+}
+
+export function markDeliveryEndWritten(orderId: string): void {
+  memory.endWritten.add(orderId);
+}
+
+export function parseDirectoryCursor(raw: string | null): DirectoryCursor {
+  if (!raw) {
+    return { v: 1, afterId: null, seen: [], emitted: [], scanDone: false };
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<DirectoryCursor>;
+    if (parsed.v !== 1 || !Array.isArray(parsed.seen) || !Array.isArray(parsed.emitted)) {
+      return { v: 1, afterId: null, seen: [], emitted: [], scanDone: false };
+    }
+    return {
+      v: 1,
+      afterId: typeof parsed.afterId === "string" ? parsed.afterId : null,
+      seen: parsed.seen.filter((id) => typeof id === "string"),
+      emitted: parsed.emitted.filter((id) => typeof id === "string"),
+      scanDone: parsed.scanDone === true,
+    };
+  } catch {
+    return { v: 1, afterId: null, seen: [], emitted: [], scanDone: false };
+  }
+}
+
+export async function listDirectoryPage(input: {
+  cursor: string | null;
+  concurrency: number;
+  now: number;
+  memory?: DirectoryMemory;
+  restartWaitMs?: number;
+  listOpenIds: (afterId: string | null, limit: number) => Promise<OpenOrderHead[]>;
+}): Promise<SyncDirectoryPage> {
+  const state = input.memory ?? memory;
+  const waitMs = input.restartWaitMs ?? RESTART_WAIT_MS;
+  const opening = input.cursor == null;
+  const cursor = parseDirectoryCursor(input.cursor);
+  const limit = Math.max(1, input.concurrency);
+  const labels = new Map<string, string>();
+
+  if (!cursor.scanDone) {
+    const page = await input.listOpenIds(cursor.afterId, limit);
+    for (const row of page) {
+      if (!cursor.seen.includes(row.id)) {
+        cursor.seen.push(row.id);
+      }
+      labels.set(row.id, headLabel(row));
+    }
+    const last = page[page.length - 1];
+    cursor.afterId = last ? last.id : cursor.afterId;
+    cursor.scanDone = page.length < limit;
+  }
+
+  const members: SyncDirectoryMember[] = [];
+  for (const id of cursor.seen) {
+    if (cursor.emitted.includes(id)) {
+      continue;
+    }
+    if (members.length >= limit) {
+      break;
+    }
+    cursor.emitted.push(id);
+    members.push({
+      stream_key: streamKey(id),
+      thread_id: threadId(id),
+      label: labels.get(id) || id,
+      kind: "order",
+    });
+  }
+
+  const pendingEmit = cursor.seen.some((id) => !cursor.emitted.includes(id));
+  const missing =
+    state.previousIds == null
+      ? []
+      : state.previousIds.filter((id) => !cursor.seen.includes(id));
+  const endsReady = missing.every((id) => state.endWritten.has(id));
+  const restartReady = state.previousIds != null || input.now - state.startedAt >= waitMs;
+  const ready = cursor.scanDone && !pendingEmit && endsReady && restartReady;
+  const complete = ready && !opening;
+  if (complete) {
+    state.previousIds = [...cursor.seen];
+  }
+  return {
+    members,
+    ...(complete ? {} : { next_cursor: JSON.stringify(cursor) }),
+    complete,
+  };
+}
+
+export function pageSelectedHeads(
+  heads: OpenOrderHead[],
+  afterId: string | null,
+  limit: number,
+): OpenOrderHead[] {
+  if (limit <= 0) {
+    return [];
+  }
+  const start = afterId ? heads.findIndex((row) => row.id === afterId) + 1 : 0;
+  if (afterId && start <= 0) {
+    return [];
+  }
+  return heads.slice(start, start + limit);
+}
+
+function headLabel(row: OpenOrderHead): string {
+  const nick = row.nickname?.trim();
+  const project = row.projectName?.trim();
+  if (nick && project) {
+    return `${nick} · ${project}`;
+  }
+  return nick || project || row.id;
+}

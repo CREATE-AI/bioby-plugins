@@ -1,0 +1,58 @@
+import { defineLocaleTables } from "@regenic/domain";
+
+export const deliveryLocaleTables = defineLocaleTables({
+  en: {
+    "catalog.title": "CRM delivery orders",
+    "catalog.channelLabel": "CRM delivery",
+    "catalog.description":
+      "Private plugin. Reads in-delivery CRM orders from MongoDB and keeps one conversation per order.",
+    "catalog.credentialHint":
+      "The MongoDB URI is stored in the keychain. It is not kept in the installation config.",
+    "field.mongoUri": "MongoDB URI",
+    "field.mongoUri.placeholder": "mongodb://user:pass@host:27017/crm",
+    "field.mongoDb": "Database name",
+    "field.mongoDb.placeholder": "Leave empty to use the database in the URI",
+    "field.refresh": "Refresh interval (ms)",
+    "field.concurrency": "Orders per directory page",
+    "field.selection": "Which orders to sync",
+    "option.selection.pick": "Choose orders",
+    "option.selection.recent": "Newest by submission time",
+    "option.selection.all": "Every in-delivery order",
+    "field.orderIds": "Orders",
+    "field.orderIds.placeholder": "Save the connection first, then search by nickname, project, or link",
+    "field.recentLimit": "How many newest orders",
+    "field.recentLimit.placeholder": "Still in delivery, newest submission time first",
+    "confirm.all.warning": "This syncs every order that is still in delivery. That can be hundreds of conversations.",
+    "confirm.all.ack": "Sync every in-delivery order",
+    "present.delivery": "CRM delivery orders",
+    "kind.order": "Delivery order",
+    "probe.loaded":
+      "Private delivery connector is loaded. The Regenic process must be able to reach CRM MongoDB.",
+  },
+  zh: {
+    "catalog.title": "CRM 交付订单",
+    "catalog.channelLabel": "CRM 交付",
+    "catalog.description":
+      "私有插件。直接读 CRM 的 MongoDB，把还在交付中的订单收成会话。不走 CRM 的 HTTP，也不写回。",
+    "catalog.credentialHint": "MongoDB 连接串放进钥匙串，不留在安装配置里。",
+    "field.mongoUri": "MongoDB 连接串",
+    "field.mongoUri.placeholder": "mongodb://user:pass@host:27017/crm",
+    "field.mongoDb": "库名",
+    "field.mongoDb.placeholder": "不填就用连接串里的库名",
+    "field.refresh": "检查间隔（毫秒）",
+    "field.concurrency": "目录每一页最多几张订单",
+    "field.selection": "同步哪些订单",
+    "option.selection.pick": "自己选",
+    "option.selection.recent": "提报时间最新的",
+    "option.selection.all": "全部还在交付的订单",
+    "field.orderIds": "订单",
+    "field.orderIds.placeholder": "先保存连接，再用达人昵称、项目名称或达人链接搜索",
+    "field.recentLimit": "最新多少张",
+    "field.recentLimit.placeholder": "只含还在交付的，按提报时间从新到旧",
+    "confirm.all.warning": "这会同步每一张还在交付的订单，会话可能会有几百条。",
+    "confirm.all.ack": "同步全部还在交付的订单",
+    "present.delivery": "CRM 交付订单",
+    "kind.order": "交付订单",
+    "probe.loaded": "交付订单连接器已加载。跑它的这台 Regenic 必须能连上 CRM 的 MongoDB。",
+  },
+});
