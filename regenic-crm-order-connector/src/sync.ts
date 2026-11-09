@@ -405,34 +405,23 @@ function noticeSteps(order: OrderDoc, cursor: OrderCursor, now: string): StepDra
   const steps: StepDraft[] = [];
   const decisions = cursor.asks;
   if (!order.reviewNeeded) {
-    for (const suffix of [cursor.notices.customer, cursor.notices.ops]) {
-      if (suffix && cursor.fp[suffix]) {
-        steps.push({ suffix, at: now, kind: "notice", actor: "assistant", speaker: "给运营", text: "", tombstone: true });
-      }
-    }
-    cursor.notices = {};
-    cursor.reviewAt = undefined;
-    cursor.script = undefined;
+    // 清标或改状态只去掉订单上的待人工标记。已经写下的通知留着。
+    // 这一轮还没写上给客户、句子后来才出现时，允许补一次。
+    steps.push(...fillCustomerOnce(order, decisions, cursor, cursor.reviewAt));
+    void now;
     return steps;
   }
   const reviewAt = order.reviewAt || order.updatedTime || now;
-  const script = customerText(order, decisions);
-  const scriptHash = shortHash(script);
-  const fresh = cursor.reviewAt !== reviewAt;
-  if (fresh) {
+  if (cursor.reviewAt !== reviewAt) {
     cursor.reviewAt = reviewAt;
-    cursor.script = scriptHash;
+    const script = customerText(order, decisions);
+    cursor.script = script ? shortHash(script) : undefined;
     if (script) {
       const suffix = `notice-${compactTime(reviewAt)}-customer`;
       cursor.notices.customer = suffix;
-      steps.push({
-        suffix,
-        at: reviewAt,
-        kind: "notice",
-        actor: "assistant",
-        speaker: "给客户",
-        text: `[给客户]\n${script}`,
-      });
+      steps.push(customerNotice(suffix, reviewAt, script));
+    } else {
+      delete cursor.notices.customer;
     }
     const suffix = `notice-${compactTime(reviewAt)}-ops`;
     cursor.notices.ops = suffix;
@@ -446,32 +435,38 @@ function noticeSteps(order: OrderDoc, cursor: OrderCursor, now: string): StepDra
     });
     return steps;
   }
-  if (script && !cursor.notices.customer) {
-    const suffix = `notice-${compactTime(reviewAt)}-customer`;
-    cursor.notices.customer = suffix;
-    cursor.script = scriptHash;
-    steps.push({
-      suffix,
-      at: reviewAt,
-      kind: "notice",
-      actor: "assistant",
-      speaker: "给客户",
-      text: `[给客户]\n${script}`,
-    });
-  }
-  if (cursor.script !== scriptHash && cursor.notices.customer) {
-    cursor.script = scriptHash;
-    steps.push({
-      suffix: cursor.notices.customer,
-      at: reviewAt,
-      kind: "notice",
-      actor: "assistant",
-      speaker: "给客户",
-      text: script ? `[给客户]\n${script}` : "",
-      tombstone: !script,
-    });
-  }
+  steps.push(...fillCustomerOnce(order, decisions, cursor, reviewAt));
   return steps;
+}
+
+function fillCustomerOnce(
+  order: OrderDoc,
+  decisions: DecisionDoc[],
+  cursor: OrderCursor,
+  reviewAt: string | undefined,
+): StepDraft[] {
+  if (!reviewAt || cursor.notices.customer) {
+    return [];
+  }
+  const script = customerText(order, decisions);
+  if (!script) {
+    return [];
+  }
+  const suffix = `notice-${compactTime(reviewAt)}-customer`;
+  cursor.notices.customer = suffix;
+  cursor.script = shortHash(script);
+  return [customerNotice(suffix, reviewAt, script)];
+}
+
+function customerNotice(suffix: string, at: string, script: string): StepDraft {
+  return {
+    suffix,
+    at,
+    kind: "notice",
+    actor: "assistant",
+    speaker: "给客户",
+    text: `[给客户]\n${script}`,
+  };
 }
 
 function customerText(order: OrderDoc, decisions: DecisionDoc[]): string {

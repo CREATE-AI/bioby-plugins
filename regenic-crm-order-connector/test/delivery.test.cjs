@@ -463,6 +463,112 @@ test("an ops handoff with a script template writes the customer sentence", async
   assert.equal(opsOnly.records.some((record) => recordText(record).startsWith("[给运营]")), true);
 });
 
+test("a handoff notice stays after the flag is cleared or the quote changes", async () => {
+  const handed = await runUntilLive(order({
+    status: "BARGAINING",
+    sharedScene: "TOO_LOW",
+    reviewNeeded: true,
+    reviewAt: "2026-11-06T09:30:00.000Z",
+    reviewReason: "价格要客户看",
+    externalQuote: 100,
+  }), project());
+  const customerId = handed.records.find((record) => recordText(record).startsWith("[给客户]")).external_id;
+  const cleared = await advanceDelivery({
+    orderId: "a",
+    order: order({
+      status: "BARGAINING",
+      sharedScene: "REJECT",
+      reviewNeeded: false,
+      externalQuote: 999,
+    }),
+    project: project(),
+    store: emptyStore(),
+    cursor: handed.cursor,
+    pageSize: 20,
+    now: "2026-11-06T12:00:00.000Z",
+  });
+  assert.equal(cleared.records.some((record) => record.external_id === customerId), false);
+  assert.equal(cleared.records.some((record) => record.operation === "tombstone" && record.external_id.includes(":notice-")), false);
+
+  const again = await runUntilLive(order({
+    status: "FOLLOWING",
+    reviewNeeded: true,
+    reviewAt: "2026-11-06T09:30:00.000Z",
+    reviewReason: "缺项目",
+  }), project());
+  assert.equal(again.records.some((record) => recordText(record).startsWith("[给客户]")), false);
+  const filled = await advanceDelivery({
+    orderId: "a",
+    order: order({
+      status: "FOLLOWING",
+      reviewNeeded: false,
+      externalQuote: 100,
+    }),
+    project: project(),
+    store: emptyStore({
+      decisions: [{
+        id: "d-late",
+        updatedAt: "2026-11-06T12:00:00.000Z",
+        ask: {
+          party: "OPS",
+          scriptTemplate: "达人确认{price}合作，请问是否确认推进。",
+          facts: [{ kind: "EXTERNAL_PRICE", value: "100" }],
+        },
+      }],
+    }),
+    cursor: again.cursor,
+    pageSize: 20,
+    now: "2026-11-06T12:00:00.000Z",
+  });
+  const added = filled.records.filter((record) => recordText(record).startsWith("[给客户]"));
+  assert.equal(added.length, 1);
+  assert.match(recordText(added[0]), /达人确认100合作/);
+  const rewritten = await advanceDelivery({
+    orderId: "a",
+    order: order({
+      status: "FOLLOWING",
+      reviewNeeded: true,
+      reviewAt: "2026-11-06T09:30:00.000Z",
+      externalQuote: 100,
+    }),
+    project: project(),
+    store: emptyStore({
+      decisions: [{
+        id: "d-late",
+        updatedAt: "2026-11-06T13:00:00.000Z",
+        ask: {
+          party: "OPS",
+          scriptTemplate: "达人改口了，请问是否继续。",
+        },
+      }],
+    }),
+    cursor: filled.cursor,
+    pageSize: 20,
+    now: "2026-11-06T13:00:00.000Z",
+  });
+  assert.equal(rewritten.records.some((record) => record.external_id.includes(":notice-")), false);
+
+  const nextRound = await advanceDelivery({
+    orderId: "a",
+    order: order({
+      status: "FOLLOWING",
+      reviewNeeded: true,
+      reviewAt: "2026-11-07T01:00:00.000Z",
+      reviewReason: "又一次转人工",
+      sharedScene: "SCHEDULE",
+    }),
+    project: project(),
+    store: emptyStore(),
+    cursor: filled.cursor,
+    pageSize: 20,
+    now: "2026-11-07T01:00:00.000Z",
+  });
+  const freshNotices = nextRound.records.filter((record) => record.external_id.includes(":notice-") && record.operation !== "tombstone");
+  assert.equal(freshNotices.some((record) => record.external_id.endsWith("-ops")), true);
+  assert.equal(freshNotices.some((record) => record.external_id.endsWith("-customer")), true);
+  assert.equal(nextRound.records.some((record) => record.operation === "tombstone"), false);
+});
+
 test("older influencer mail is read once even when the live watermark is already ahead", async () => {
   const cursor = emptyOrderCursor();
   cursor.stage = "live";
