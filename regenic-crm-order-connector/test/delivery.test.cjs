@@ -416,6 +416,7 @@ test("a customer script found after the handoff still writes a customer notice",
   const customer = page.records.find((record) => recordText(record).startsWith("[给客户]"));
   assert.ok(customer);
   assert.equal(recordSpeaker(customer), "给客户");
+  assert.equal(recordKind(customer), "user");
   assert.match(recordText(customer), /请确认报价/);
 });
 

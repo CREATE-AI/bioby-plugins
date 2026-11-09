@@ -463,7 +463,8 @@ function customerNotice(suffix: string, at: string, script: string): StepDraft {
     suffix,
     at,
     kind: "notice",
-    actor: "assistant",
+    // 用进来的消息，规则才能在新通知出现时被叫醒。助手消息会被当成自己发出的，不会触发规则。
+    actor: "user",
     speaker: "给客户",
     text: `[给客户]\n${script}`,
   };
@@ -602,7 +603,7 @@ function storedFaceSteps(order: OrderDoc, project: ProjectDoc | null, cursor: Or
         suffix,
         at: order.reviewAt || at,
         kind: "notice",
-        actor: "assistant",
+        actor: "user",
         speaker: "给客户",
         text: script ? `[给客户]\n${script}` : "",
         tombstone: !script,
