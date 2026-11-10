@@ -5,6 +5,12 @@ export interface FollowDoc {
   followType?: string;
   followResult?: string;
   selectedStatus?: string;
+  /** 跟进里贴的文件链接。 */
+  attachmentUrls?: string[];
+  /** 品牌端交付审核：SCRIPT 脚本，VIDEO 视频草稿。 */
+  reviewType?: string;
+  /** 这次审核当时用的材料链接。 */
+  materialLinks?: string[];
 }
 
 export interface OrderDoc {
@@ -23,6 +29,10 @@ export interface OrderDoc {
   bargainServiceFeeUsd?: number | null;
   bargainValueAddedFeeUsd?: number | null;
   status?: string;
+  /** selectedWorkflow.finalScriptLink，最终脚本链接。 */
+  scriptLink?: string;
+  /** selectedWorkflow.publishLinks，没有列表时用 publishLink。 */
+  publishLinks?: string[];
   isDeleted?: boolean;
   createdTime?: string;
   updatedTime?: string;

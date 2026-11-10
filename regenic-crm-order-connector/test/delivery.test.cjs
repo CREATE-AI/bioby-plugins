@@ -391,7 +391,7 @@ test("stored system steps are rewritten with a readable speaker", async () => {
   const ops = page.records.find((record) => record.external_id.endsWith("-ops"));
   assert.equal(ops.operation, "revise");
   assert.equal(recordSpeaker(ops), "给运营");
-  assert.equal(page.cursor.face, 3);
+  assert.equal(page.cursor.face, 4);
 });
 
 test("an old summary is removed and a later round does not add one", async () => {

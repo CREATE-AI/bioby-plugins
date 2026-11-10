@@ -60,7 +60,7 @@ CRM 后端是 `bioby-email`，订单在 MongoDB 的 `project_fields`。前端 `b
 | `project_field_change_logs` | 订单变更日志，按 `projectFieldId` 查 |
 | `delivery_decision_items` | 决策事项。给客户/运营的话在 `askJson` 里 |
 
-订单上下文对照 `DeliveryOrderAgentInboxHistoryAssembler` 放进信封的 `projectOrderContext`：`projectName`、`briefUrl`、`briefType`、`briefText`、`brandProjectInfo`、`brandProjectInfoEnglish`、`demands`。再加上这张订单自己的达人昵称、平台、链接、对外报价、达人报价、结算方式（账期或预充值，没记就写未记录）、当前交付状态，以及所属项目的 `项目 ID` 和 `项目会话：crm-project:<项目id>`（见第 11 节）。订单上的合作方式、交付物清单、合作权益不写进上下文。那是我们发邮件时带上的固定内容，不代表达人已经同意。达人同意了什么，看会话里的往来邮件：说话人是「我们」的是我们发的，说话人是达人的是达人回的。服务费只出现在给运营看的步骤里，不写进给客户的通知。
+订单上下文对照 `DeliveryOrderAgentInboxHistoryAssembler` 放进信封的 `projectOrderContext`：`projectName`、`briefUrl`、`briefType`、`briefText`、`brandProjectInfo`、`brandProjectInfoEnglish`、`demands`。再加上这张订单自己的达人昵称、平台、链接、对外报价、达人报价、结算方式（账期或预充值，没记就写未记录）、当前交付状态，以及所属项目的 `项目 ID` 和 `项目会话：crm-project:<项目id>`（见第 11 节）。有值才写这些链接：`脚本链接`（`finalScriptLink`，再加上脚本审核跟进和脚本审核材料里的链接）、`视频草稿链接`（视频草稿审核跟进的附件，以及视频草稿审核材料）、`发布链接`（`publishLinks`，没有列表时用 `publishLink`）。跟进正文下面会带上 `附件：`。已经同步过的订单，上下文会再改写一次，把这些链接补上；之后链接变了，会再追加一条上下文。订单上的合作方式、交付物清单、合作权益不写进上下文。那是我们发邮件时带上的固定内容，不代表达人已经同意。达人同意了什么，看会话里的往来邮件：说话人是「我们」的是我们发的，说话人是达人的是达人回的。服务费只出现在给运营看的步骤里，不写进给客户的通知。
 
 邮件对照订单详情页的「邮件和跟进」，查询方式和 `InfluencerCampaignReplyLookup.loadThread` 相同，再按 `DecisionContextLoader.thisOrder` 滤到这张单：
 
@@ -340,7 +340,7 @@ GitHub Actions 里，一次运行是一条时间线。每一步有固定名字�
 
 两边都靠项目 id 关联。
 
-- 订单会话的上下文里有 `项目 ID：<项目id>` 和 `项目会话：crm-project:<项目id>`。已经同步过的订单，上下文会改写一次，把这两行补上。
+- 订单会话的上下文里有 `项目 ID：<项目id>` 和 `项目会话：crm-project:<项目id>`。有脚本、视频草稿或发布链接时，上下文里各写一行。已经同步过的订单，上下文会再改写一次，把这些补上。
 - 项目会话里，每张还在交付的订单各占一条，编号 `<项目id>:order-<订单id>`。内容是达人、平台、链接、交付状态、对外报价、订单 ID、`订单会话：crm-delivery:<订单id>`。不写达人报价，不抄订单的邮件和跟进。
 - 只装了项目连接器、没把这张订单同步进来时，项目会话里照样写这张订单的会话 id，只是 Regenic 里还没有那条订单会话。
 
@@ -353,6 +353,7 @@ GitHub Actions 里，一次运行是一条时间线。每一步有固定名字�
 | 项目状态 | `status-<时间>-<状态>` | 第一次写当前状态；之后状态变了就追加一条「旧状态 → 新状态」 |
 | 项目动态 | `log-<日志id>` | `project_operation_logs` 里每一行一条，按 `_id` 往后读 |
 | 订单 | `order-<订单id>` | 订单进入交付时新建；交付状态、对外报价等变了就改这一条 |
+| 收件箱 | `inbox` | 第一次同步写一条进来的消息，项目会话才会出现在收件箱。内容不变就不再写 |
 | 结束 | `end-deleted-<时间>` | 项目被删除，或库里没有了 |
 
 项目信息只写有值的行：项目名、项目 ID、等级、平台、目标国家和语言、总预算和币种、报价方式、对接群、商务/运营/PM、开始和结束时间、截止日期、活动名、产品链接、brief、brief 链接、产品信息、英文品牌和产品名、需求、项目权益，以及其他说明（老数据没拆开时写整段项目描述）。项目状态不写在项目信息里，单独成一步，免得一改状态就整段重发。项目权益只是项目上填的内容，不代表达人同意。

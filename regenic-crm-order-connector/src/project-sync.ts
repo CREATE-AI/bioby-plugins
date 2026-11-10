@@ -67,6 +67,7 @@ export async function advanceProject(input: {
   const label = projectLabel(project);
   const records: IngestRecord[] = [];
   emit(project.id, label, cursor, records, infoSteps(project, cursor, input.now));
+  emit(project.id, label, cursor, records, [inboxStep(input.now)]);
 
   if (cursor.stage === "logs") {
     const more = await pullLogs(input, cursor, label, records, input.pageSize);
@@ -255,6 +256,18 @@ export function projectInfoText(project: ProjectInfoDoc): string {
   add(split ? "其他说明" : "项目描述", split ? project.descriptionExtra : project.description);
   lines.push("这个项目里每张还在交付的订单，在本会话里各占一条，写着它的订单会话。");
   return lines.join("\n");
+}
+
+/** 收件箱只显示有待处理消息的会话。这条用进来的口吻写一次，项目会话才会出现在收件箱。 */
+function inboxStep(now: string): StepDraft {
+  return {
+    suffix: "inbox",
+    at: now,
+    kind: "notice",
+    actor: "user",
+    speaker: "项目",
+    text: "这个项目会话已同步，可以在收件箱查看。每张订单后面写着订单会话 id。要视频草稿链接或脚本链接时，到对应的订单会话里取。",
+  };
 }
 
 function orderStep(row: ProjectOrderRow, project: ProjectInfoDoc): StepDraft {

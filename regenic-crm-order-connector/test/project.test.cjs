@@ -73,6 +73,9 @@ test("a new project writes info, status, activity and its in-delivery orders", a
   assert.doesNotMatch(orderA, /达人报价/);
   assert.deepEqual(cursor.orders, ["a", "b"]);
   assert.equal(records.every((record) => recordSurface(record).actor_label !== "系统"), true);
+  const inbox = records.find((record) => record.external_id === "p1:inbox");
+  assert.equal(recordSurface(inbox).kind, "user");
+  assert.match(recordText(inbox), /收件箱/);
 });
 
 test("later polls add new activity, a status message, and update order lines", async () => {
@@ -216,7 +219,43 @@ test("an order conversation written before the project link gets its context rew
   const context = advanced.records.find((record) => record.external_id === "a:context");
   assert.equal(context.operation, "revise");
   assert.match(recordText(context), /项目会话：crm-project:p1/);
-  assert.equal(advanced.cursor.face, 3);
+  assert.equal(advanced.cursor.face, 4);
+});
+
+test("order context includes script, draft and publish links", async () => {
+  const advanced = await advanceDelivery({
+    orderId: "a",
+    order: {
+      id: "a",
+      nickname: "小明",
+      status: "VIDEO_DRAFT_REVIEWING",
+      scriptLink: "https://example.com/script",
+      publishLinks: ["https://example.com/post"],
+      createdTime: "2026-11-01T00:00:00.000Z",
+      updatedTime: "2026-11-06T09:00:00.000Z",
+      follows: [{
+        followTime: "2026-11-06T08:00:00.000Z",
+        followContent: "草稿在这里",
+        selectedStatus: "VIDEO_DRAFT_REVIEWING",
+        attachmentUrls: ["https://example.com/draft"],
+      }],
+    },
+    project: null,
+    store: {
+      async listMails() { return { items: [], full: false }; },
+      async listLogs() { return { items: [], full: false }; },
+      async listDecisions() { return { items: [], full: false }; },
+    },
+    cursor: emptyOrderCursor(),
+    pageSize: 20,
+    now: "2026-11-06T10:00:00.000Z",
+  });
+  const context = advanced.records.find((record) => record.external_id === "a:context");
+  assert.match(recordText(context), /脚本链接：https:\/\/example.com\/script/);
+  assert.match(recordText(context), /视频草稿链接：https:\/\/example.com\/draft/);
+  assert.match(recordText(context), /发布链接：https:\/\/example.com\/post/);
+  const note = advanced.records.find((record) => record.external_id.includes(":note-"));
+  assert.match(recordText(note), /附件：https:\/\/example.com\/draft/);
 });
 
 function projectInfo(extra = {}) {

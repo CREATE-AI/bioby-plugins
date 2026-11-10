@@ -11,6 +11,7 @@ import {
   mailBelongs,
   type DecisionDoc,
   type DeliveryStore,
+  type FollowDoc,
   type LogDoc,
   type MailDoc,
   type OrderDoc,
@@ -128,6 +129,14 @@ export async function advanceDelivery(input: {
   if ((cursor.face ?? 0) < 3) {
     emit(order, label, cursor, records, contextRewrite(order, input.project, cursor));
     cursor.face = 3;
+  }
+  if ((cursor.face ?? 0) < 4) {
+    const rewrite = contextRewrite(order, input.project, cursor);
+    if (rewrite.length > 0) {
+      emit(order, label, cursor, records, rewrite);
+      cursor.projectFp = shortHash(JSON.stringify(contextFingerprint(order, input.project)));
+    }
+    cursor.face = 4;
   }
   let hasMore = false;
   let guard = 0;
@@ -529,7 +538,7 @@ function contextSteps(
   cursor: OrderCursor,
   laterOnly: boolean,
 ): StepDraft[] {
-  const fp = shortHash(JSON.stringify(projectFingerprint(project)));
+  const fp = shortHash(JSON.stringify(contextFingerprint(order, project)));
   const at = order.createdTime || order.updatedTime || new Date(0).toISOString();
   if (!cursor.projectFp) {
     cursor.projectFp = fp;
@@ -646,7 +655,7 @@ function noteSteps(order: OrderDoc, cursor: OrderCursor, realMail: boolean): Ste
   const seen = new Set<string>();
   for (const follow of order.follows) {
     const content = follow.followContent?.trim() ?? "";
-    if (!content) {
+    if (!content && linkList(follow.attachmentUrls).length === 0) {
       continue;
     }
     const at = follow.followTime || order.updatedTime || new Date(0).toISOString();
@@ -753,8 +762,11 @@ function readableMailBody(mail: MailDoc): string {
   return plain || html;
 }
 
-function followPieces(follow: { followTime?: string; followContent?: string; followType?: string; followResult?: string; selectedStatus?: string }): Array<{ at: string; text: string }> {
+function followPieces(follow: FollowDoc): Array<{ at: string; text: string }> {
   const content = follow.followContent?.trim() ?? "";
+  if (linkList(follow.attachmentUrls).length > 0) {
+    return [{ at: follow.followTime || new Date(0).toISOString(), text: noteText(follow) }];
+  }
   const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const base = follow.followTime || new Date(0).toISOString();
   if (lines.length < 2) {
@@ -791,7 +803,7 @@ function shifted(base: Date, followTime: string, index: number): string {
   return new Date(base.getTime() + index).toISOString();
 }
 
-function noteText(follow: { followType?: string; followResult?: string; selectedStatus?: string; followContent?: string }): string {
+function noteText(follow: FollowDoc): string {
   const lines: string[] = [];
   const type = followTypeLabel(follow.followType);
   const result = followResultLabel(follow.followResult);
@@ -808,6 +820,9 @@ function noteText(follow: { followType?: string; followResult?: string; selected
   const content = follow.followContent?.trim();
   if (content) {
     lines.push(content);
+  }
+  for (const url of linkList(follow.attachmentUrls)) {
+    lines.push(`附件：${url}`);
   }
   return lines.join("\n");
 }
@@ -923,7 +938,67 @@ function contextText(order: OrderDoc, project: ProjectDoc | null): string {
       `需求：${project.demands ?? ""}`,
     );
   }
+  addLinks(lines, "脚本链接", scriptLinks(order));
+  addLinks(lines, "视频草稿链接", draftLinks(order));
+  addLinks(lines, "发布链接", linkList(order.publishLinks));
   return lines.join("\n");
+}
+
+const LINK_LIMIT = 20;
+const DRAFT_STATUSES = new Set(["VIDEO_DRAFT_REVIEWING", "VIDEO_DRAFT_REVISING"]);
+const SCRIPT_STATUSES = new Set(["SCRIPT_REVIEWING", "SCRIPT_REVISING", "WAITING_SCRIPT"]);
+
+function contextFingerprint(order: OrderDoc, project: ProjectDoc | null): unknown {
+  return {
+    project: projectFingerprint(project),
+    script: scriptLinks(order),
+    draft: draftLinks(order),
+    publish: linkList(order.publishLinks),
+  };
+}
+
+function scriptLinks(order: OrderDoc): string[] {
+  return linkList([
+    order.scriptLink,
+    ...withoutPublish(order, order.follows.flatMap((follow) => (
+      SCRIPT_STATUSES.has(follow.selectedStatus ?? "") || follow.reviewType === "SCRIPT"
+        ? [...linkList(follow.attachmentUrls), ...linkList(follow.materialLinks)]
+        : []
+    ))),
+  ]);
+}
+
+function draftLinks(order: OrderDoc): string[] {
+  return withoutPublish(order, linkList(order.follows.flatMap((follow) => (
+    DRAFT_STATUSES.has(follow.selectedStatus ?? "") || follow.reviewType === "VIDEO"
+      ? [...linkList(follow.attachmentUrls), ...linkList(follow.materialLinks)]
+      : []
+  ))));
+}
+
+function withoutPublish(order: OrderDoc, links: string[]): string[] {
+  const publish = new Set(linkList(order.publishLinks));
+  return links.filter((link) => !publish.has(link));
+}
+
+function addLinks(lines: string[], label: string, links: string[]): void {
+  for (const link of links) {
+    lines.push(`${label}：${link}`);
+  }
+}
+
+function linkList(value: string | Array<string | undefined> | undefined): string[] {
+  const raw = Array.isArray(value) ? value : value ? [value] : [];
+  const seen = new Set<string>();
+  const links: string[] = [];
+  for (const item of raw) {
+    const text = item?.trim() ?? "";
+    if (text && !seen.has(text) && links.length < LINK_LIMIT) {
+      seen.add(text);
+      links.push(text);
+    }
+  }
+  return links;
 }
 
 function projectFingerprint(project: ProjectDoc | null): unknown {

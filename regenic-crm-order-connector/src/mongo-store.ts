@@ -417,6 +417,10 @@ function mapOrder(row: Document): OrderDoc {
     bargainServiceFeeUsd: numberOf(row.bargainServiceFeeUsd),
     bargainValueAddedFeeUsd: numberOf(row.bargainValueAddedFeeUsd),
     status: stringOf(workflow?.status),
+    scriptLink: stringOf(workflow?.finalScriptLink),
+    publishLinks: stringsOf(workflow?.publishLinks).length > 0
+      ? stringsOf(workflow?.publishLinks)
+      : stringsOf(workflow?.publishLink),
     isDeleted: row.isDeleted === true,
     createdTime: iso(row.createdTime),
     updatedTime: iso(row.updatedTime),
@@ -435,6 +439,9 @@ function mapOrder(row: Document): OrderDoc {
         followType: stringOf(follow.followType),
         followResult: stringOf(follow.followResult),
         selectedStatus: stringOf(follow.selectedStatus),
+        attachmentUrls: stringsOf(follow.attachmentUrls),
+        reviewType: stringOf(follow.deliveryCustomerReviewType),
+        materialLinks: stringsOf(follow.deliveryCustomerReviewMaterialSnapshot),
       };
     }),
   };
@@ -544,6 +551,20 @@ function stringList(value: unknown): string[] | undefined {
   const items = Array.isArray(value) ? value : value == null ? [] : [value];
   const texts = items.map((item) => stringOf(item)).filter((item): item is string => Boolean(item));
   return texts.length > 0 ? texts : undefined;
+}
+
+function stringsOf(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value : value == null ? [] : [value];
+  const seen = new Set<string>();
+  const links: string[] = [];
+  for (const item of raw) {
+    const text = stringOf(item);
+    if (text && !seen.has(text)) {
+      seen.add(text);
+      links.push(text);
+    }
+  }
+  return links;
 }
 
 function stringOf(value: unknown): string | undefined {
