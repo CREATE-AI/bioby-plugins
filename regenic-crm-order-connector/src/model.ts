@@ -17,6 +17,8 @@ export interface OrderDoc {
   bloggerLink?: string;
   externalQuote?: number | null;
   influencerQuote?: number | null;
+  /** 账期 ACCOUNT_PERIOD，或预充值 PREPAID。空着表示订单没记。 */
+  settlementMethod?: string;
   cooperationBenefits?: string;
   bargainServiceFeeUsd?: number | null;
   bargainValueAddedFeeUsd?: number | null;

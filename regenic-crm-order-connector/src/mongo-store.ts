@@ -252,6 +252,7 @@ function mapOrder(row: Document): OrderDoc {
     bloggerLink: stringOf(row.bloggerLink),
     externalQuote: numberOf(row.externalQuote),
     influencerQuote: numberOf(row.influencerQuote),
+    settlementMethod: stringOf(row.settlementMethod),
     cooperationBenefits: stringOf(row.cooperationBenefits),
     bargainServiceFeeUsd: numberOf(row.bargainServiceFeeUsd),
     bargainValueAddedFeeUsd: numberOf(row.bargainValueAddedFeeUsd),

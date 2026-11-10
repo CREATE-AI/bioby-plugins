@@ -60,7 +60,7 @@ CRM 后端是 `bioby-email`，订单在 MongoDB 的 `project_fields`。前端 `b
 | `project_field_change_logs` | 订单变更日志，按 `projectFieldId` 查 |
 | `delivery_decision_items` | 决策事项。给客户/运营的话在 `askJson` 里 |
 
-订单上下文对照 `DeliveryOrderAgentInboxHistoryAssembler` 放进信封的 `projectOrderContext`：`projectName`、`briefUrl`、`briefType`、`briefText`、`benefits`、`brandProjectInfo`、`brandProjectInfoEnglish`、`demands`。再加上这张订单自己的达人昵称、平台、链接、对外报价、达人报价、合作权益、当前交付状态。服务费只出现在给运营看的步骤里，不写进给客户的通知。
+订单上下文对照 `DeliveryOrderAgentInboxHistoryAssembler` 放进信封的 `projectOrderContext`：`projectName`、`briefUrl`、`briefType`、`briefText`、`benefits`、`brandProjectInfo`、`brandProjectInfoEnglish`、`demands`。再加上这张订单自己的达人昵称、平台、链接、对外报价、达人报价、结算方式（账期或预充值，没记就写未记录）、合作权益、当前交付状态。服务费只出现在给运营看的步骤里，不写进给客户的通知。
 
 邮件对照订单详情页的「邮件和跟进」，查询方式和 `InfluencerCampaignReplyLookup.loadThread` 相同，再按 `DecisionContextLoader.thisOrder` 滤到这张单：
 

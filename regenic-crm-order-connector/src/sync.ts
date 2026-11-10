@@ -849,6 +849,7 @@ function fieldLabel(name: string | undefined): string {
     nickname: "达人昵称",
     externalQuote: "对外报价",
     influencerQuote: "达人报价",
+    settlementMethod: "结算方式",
     cooperationBenefits: "合作权益",
     bloggerLink: "主页链接",
     platform: "平台",
@@ -863,7 +864,21 @@ function showChange(field: string | undefined, value: string | undefined): strin
   if ((field ?? "").toLowerCase().includes("status")) {
     return statusLabel(value);
   }
+  if (field === "settlementMethod") {
+    return settlementLabel(value);
+  }
   return value;
+}
+
+function settlementLabel(value: string | undefined): string {
+  const raw = value?.trim().toUpperCase() ?? "";
+  if (raw === "ACCOUNT_PERIOD" || raw === "账期") {
+    return "账期";
+  }
+  if (raw === "PREPAID" || raw === "预充值") {
+    return "预充值";
+  }
+  return "未记录";
 }
 
 function contextText(order: OrderDoc, project: ProjectDoc | null): string {
@@ -874,6 +889,7 @@ function contextText(order: OrderDoc, project: ProjectDoc | null): string {
     `链接：${order.bloggerLink ?? ""}`,
     `对外报价：${order.externalQuote ?? ""}`,
     `达人报价：${order.influencerQuote ?? ""}`,
+    `结算方式：${settlementLabel(order.settlementMethod)}`,
     `合作权益：${order.cooperationBenefits ?? ""}`,
     `交付状态：${statusLabel(order.status)}`,
   ];

@@ -355,6 +355,18 @@ test("stored system steps are rewritten with a readable speaker", async () => {
   assert.equal(context.operation, "revise");
   assert.equal(recordSpeaker(context), "订单");
   assert.match(recordText(context), /小明/);
+  assert.match(recordText(context), /结算方式：未记录/);
+  const prepaid = await advanceDelivery({
+    orderId: "a",
+    order: order({ settlementMethod: "PREPAID" }),
+    project: project(),
+    store: emptyStore(),
+    cursor: emptyOrderCursor(),
+    pageSize: 20,
+    now: "2026-11-06T11:00:00.000Z",
+  });
+  const prepaidContext = prepaid.records.find((record) => record.external_id.endsWith(":context"));
+  assert.match(recordText(prepaidContext), /结算方式：预充值/);
   const ops = page.records.find((record) => record.external_id.endsWith("-ops"));
   assert.equal(ops.operation, "revise");
   assert.equal(recordSpeaker(ops), "给运营");
