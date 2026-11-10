@@ -374,6 +374,9 @@ test("stored system steps are rewritten with a readable speaker", async () => {
   assert.equal(recordSpeaker(context), "订单");
   assert.match(recordText(context), /小明/);
   assert.match(recordText(context), /结算方式：未记录/);
+  assert.doesNotMatch(recordText(context), /合作权益：/);
+  assert.doesNotMatch(recordText(context), /交付物：/);
+  assert.doesNotMatch(recordText(context), /权益：权益/);
   const prepaid = await advanceDelivery({
     orderId: "a",
     order: order({ settlementMethod: "PREPAID" }),
@@ -388,7 +391,7 @@ test("stored system steps are rewritten with a readable speaker", async () => {
   const ops = page.records.find((record) => record.external_id.endsWith("-ops"));
   assert.equal(ops.operation, "revise");
   assert.equal(recordSpeaker(ops), "给运营");
-  assert.equal(page.cursor.face, 2);
+  assert.equal(page.cursor.face, 3);
 });
 
 test("an old summary is removed and a later round does not add one", async () => {

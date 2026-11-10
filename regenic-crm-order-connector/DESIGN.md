@@ -60,7 +60,7 @@ CRM 后端是 `bioby-email`，订单在 MongoDB 的 `project_fields`。前端 `b
 | `project_field_change_logs` | 订单变更日志，按 `projectFieldId` 查 |
 | `delivery_decision_items` | 决策事项。给客户/运营的话在 `askJson` 里 |
 
-订单上下文对照 `DeliveryOrderAgentInboxHistoryAssembler` 放进信封的 `projectOrderContext`：`projectName`、`briefUrl`、`briefType`、`briefText`、`benefits`、`brandProjectInfo`、`brandProjectInfoEnglish`、`demands`。再加上这张订单自己的达人昵称、平台、链接、对外报价、达人报价、结算方式（账期或预充值，没记就写未记录）、合作权益、当前交付状态。服务费只出现在给运营看的步骤里，不写进给客户的通知。
+订单上下文对照 `DeliveryOrderAgentInboxHistoryAssembler` 放进信封的 `projectOrderContext`：`projectName`、`briefUrl`、`briefType`、`briefText`、`brandProjectInfo`、`brandProjectInfoEnglish`、`demands`。再加上这张订单自己的达人昵称、平台、链接、对外报价、达人报价、结算方式（账期或预充值，没记就写未记录）、当前交付状态，以及所属项目的 `项目 ID` 和 `项目会话：crm-project:<项目id>`（见第 11 节）。订单上的合作方式、交付物清单、合作权益不写进上下文。那是我们发邮件时带上的固定内容，不代表达人已经同意。达人同意了什么，看会话里的往来邮件：说话人是「我们」的是我们发的，说话人是达人的是达人回的。服务费只出现在给运营看的步骤里，不写进给客户的通知。
 
 邮件对照订单详情页的「邮件和跟进」，查询方式和 `InfluencerCampaignReplyLookup.loadThread` 相同，再按 `DecisionContextLoader.thisOrder` 滤到这张单：
 
@@ -288,7 +288,7 @@ GitHub Actions 里，一次运行是一条时间线。每一步有固定名字�
 
 跑这个插件的 Regenic 进程必须能直接连上 CRM 的 MongoDB。装在运营自己的电脑上、网络到不了生产库时，安装探测失败，不开始同步。现有的 AI 内审插件走 CRM 的 HTTP，不要求这台机器能连数据库。这个交付订单插件要连库，所以要装在能访问该库的那台 Regenic 上。
 
-插件清单沿用本仓库另一个 CRM 插件的样子：`regenic.plugin`、`connector_protocol` 省略即 `1.0`、`contributes.drivers` 只点一个驱动。驱动名 `crmDeliverySyncDriver`，`connector_type` 为 `crm-delivery-sync`，`source` 为 `crm-delivery`。`matchesThread` 只认 `crm-delivery:<订单id>`。不认 `crm:order:<订单id>`，也不认邮件提报那条 `crm:ops_task:<任务id>`。
+插件清单沿用本仓库另一个 CRM 插件的样子：`regenic.plugin`、`connector_protocol` 省略即 `1.0`。`contributes.drivers` 点两个驱动：订单 `crmDeliverySyncDriver` 和项目 `crmProjectSyncDriver`（见第 11 节）。订单驱动名 `crmDeliverySyncDriver`，`connector_type` 为 `crm-delivery-sync`，`source` 为 `crm-delivery`。`matchesThread` 只认 `crm-delivery:<订单id>`。不认 `crm:order:<订单id>`，也不认邮件提报那条 `crm:ops_task:<任务id>`。
 
 加载方式和现有私有插件一样，用 `REGENIC_PLUGIN_DIR` 指到 `bioby-plugins`，或用 `REGENIC_CHANNEL_PLUGIN` 指到本目录。公开引擎不会自己带上这个包。
 
@@ -316,3 +316,99 @@ GitHub Actions 里，一次运行是一条时间线。每一步有固定名字�
 - 项目 brief 改了、订单文档没改：下一轮增量后出现一条新的上下文。
 - 人没在操作时，每张已登记的订单大约每 2 分钟检查一次。内核会把 `refresh_interval_ms` 收到这个长度。人正在操作时，当前会话优先，其它订单可以更晚，空下来再补。
 - 第一次补历史时，目录每一页新交出去的订单不超过 `sync_concurrency`。内核大约每 45 秒要一页。步骤指纹在各张订单自己的游标里。编号里的时间不带冒号，会话 id 仍是 `crm-delivery:<订单id>`。
+
+---
+
+## 11. 项目会话
+
+同一个插件里还有第二个连接器「CRM 项目」。每个没删除的 CRM 项目在 Regenic 里是一条会话，会话 id 是 `crm-project:<项目id>`，标题是项目名。它单独安装，单独填数据库地址。
+
+### 11.1 为什么用自己的来源
+
+项目会话不用 `crm-delivery:project-<项目id>`，改用来源 `crm-project`。Regenic 按来源和会话找它归哪个连接器。订单连接器认所有 `crm-delivery:` 开头的会话，两边共用一个来源时，项目会话会被当成订单去拉。分开以后，各认各的。
+
+| 项 | 值 |
+| --- | --- |
+| 驱动 | `crmProjectSyncDriver` |
+| `connector_type` | `crm-project-sync` |
+| `source` | `crm-project` |
+| `unit_kind` | `crm-project.project`（项目） |
+| 会话 id | `crm-project:<项目id>` |
+| 每一步的编号 | `<项目id>:<步骤>`，步骤里不带冒号 |
+
+### 11.2 项目和订单怎么关联
+
+两边都靠项目 id 关联。
+
+- 订单会话的上下文里有 `项目 ID：<项目id>` 和 `项目会话：crm-project:<项目id>`。已经同步过的订单，上下文会改写一次，把这两行补上。
+- 项目会话里，每张还在交付的订单各占一条，编号 `<项目id>:order-<订单id>`。内容是达人、平台、链接、交付状态、对外报价、订单 ID、`订单会话：crm-delivery:<订单id>`。不写达人报价，不抄订单的邮件和跟进。
+- 只装了项目连接器、没把这张订单同步进来时，项目会话里照样写这张订单的会话 id，只是 Regenic 里还没有那条订单会话。
+
+### 11.3 会话里有什么
+
+| 步骤 | 编号 | 什么时候写 |
+| --- | --- | --- |
+| 项目信息 | `context` | 第一次同步 |
+| 项目信息有更新 | `context-<时间>` | 项目信息的内容变了，追加一条完整的新信息 |
+| 项目状态 | `status-<时间>-<状态>` | 第一次写当前状态；之后状态变了就追加一条「旧状态 → 新状态」 |
+| 项目动态 | `log-<日志id>` | `project_operation_logs` 里每一行一条，按 `_id` 往后读 |
+| 订单 | `order-<订单id>` | 订单进入交付时新建；交付状态、对外报价等变了就改这一条 |
+| 结束 | `end-deleted-<时间>` | 项目被删除，或库里没有了 |
+
+项目信息只写有值的行：项目名、项目 ID、等级、平台、目标国家和语言、总预算和币种、报价方式、对接群、商务/运营/PM、开始和结束时间、截止日期、活动名、产品链接、brief、brief 链接、产品信息、英文品牌和产品名、需求、项目权益，以及其他说明（老数据没拆开时写整段项目描述）。项目状态不写在项目信息里，单独成一步，免得一改状态就整段重发。项目权益只是项目上填的内容，不代表达人同意。
+
+项目动态翻成中文：
+
+| `operationType` | 写成 |
+| --- | --- |
+| `PROJECT_CREATED` | 项目创建 |
+| `MATCHING_LAUNCHED` | 开始匹配达人 |
+| `CAMPAIGN_CREATED` | 新建活动 |
+| `CAMPAIGN_SEARCH_STARTED` | 开始搜索达人 |
+| `FILTER_TASK_STARTED` | 开始筛选达人 |
+| `LEAD_MATCH_REVIEWED` | 客户看了匹配的达人，结果合适或不合适 |
+| `LEAD_SUBMIT_REVIEW` | 达人提交给客户审核 |
+| `ONE_CLICK_SUBMIT` | 一键提报，加提报人数 |
+| `PROJECT_RESUBMIT` | 重新提报，加人数 |
+| `ORDER_CUSTOMER_REVIEW_SUBMIT` | 客户审核提报的达人 |
+| `ORDER_CUSTOMER_REVIEW_DELIVERY` | 客户审核交付内容 |
+| `PROJECT_DELETED` | 项目删除 |
+
+客户审核的两类，再写结果（通过、驳回、暂缓）、审核内容（想法、脚本、视频草稿）、意见、达人昵称和这张订单的会话 id。英文的 `message` 只是程序日志，不写；中文的照写。最后一行写操作方：用户、品牌或系统。
+
+项目会话里的步骤都是「发出的」消息，不会叫醒按新消息触发的规则，也不会让收件箱当成要处理的事。要做「每 30 分钟汇总项目下所有订单」这种事，用按时间跑的规则读项目会话。
+
+### 11.4 同步哪些项目
+
+| 字段 | 放哪 | 默认 | 作用 |
+| --- | --- | --- | --- |
+| `mongo_uri` | 钥匙串 | 无，必填 | MongoDB 连接串 |
+| `mongo_db` | 普通配置 | 连接串里的库名 | 库名 |
+| `selection` | 普通配置 | `recent` | `recent` 按创建时间取最新的，`all` 全部没删除的 |
+| `recent_limit` | 普通配置 | `30` | `selection` 为 `recent` 时取多少个，最多 600 |
+| `refresh_interval_ms` | 普通配置 | `300000` | 同一个项目两次检查的间隔 |
+| `sync_concurrency` | 普通配置 | `4` | 目录每一页最多交几个项目 |
+
+暂停、结束、品牌端删除（`brandDeleted`）的项目都算没删除，照样同步。选「全部」时安装表单先让人确认，2026-11 时库里大约 555 个。
+
+项目掉出名单有两种情况：
+
+- 项目被删除（`isDeleted` 为 true）或库里没有了：这个项目自己的拉取先写一条结束记录，目录等这条写完再放手。
+- 只是被更新的项目挤出了「最新 N 个」：不写结束，目录直接放手，会话留着不再更新。
+
+### 11.5 第一次同步和之后
+
+第一次：写项目信息和当前状态，再按每页 20 条把项目动态读完，最后把还在交付的订单每页 20 条写完（每个项目最多 300 张）。之后每次检查：项目信息或状态变了就追加；读新的项目动态；重新列一遍还在交付的订单，有变化的改那一条。一张订单离开交付，改成「交付状态：已结清（已不在交付中）」这种写法，之后不再跟它。
+
+### 11.6 读钥匙串
+
+每次拉取都要读数据库地址。钥匙串每读一次要起一个 `security` 进程，几百个会话一起读会把文件句柄用光，内核报 `spawn security EMFILE`。两个连接器都把读到的地址在内存里留一分钟，同一时刻的读取合成一次。换了地址，最多一分钟后生效。
+
+### 11.7 怎样算做完
+
+- 装上之后，名单里的项目各有一条 `crm-project:<项目id>` 会话，标题是项目名。
+- 会话里能看到项目信息、当前状态、全部项目动态、每张还在交付的订单。每张订单那条里有它的 `crm-delivery:<订单id>`。
+- 订单会话的上下文里有 `项目会话：crm-project:<项目id>`。
+- 改项目需求：下一次检查追加一条「项目信息有更新」。改项目状态：追加一条「旧状态 → 新状态」。
+- 一张订单改了交付状态：项目会话里那张订单的那一条被改写，不新增。
+- 删除项目：有一条结束记录，之后这个项目不再更新。

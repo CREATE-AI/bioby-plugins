@@ -5,10 +5,10 @@
   "regenic": {
     "plugin": true,
     "id": "@bioby/regenic-crm-order-connector",
-    "displayName": "CRM 交付订单",
+    "displayName": "CRM 交付订单和项目",
     "engines": { "regenic": "1.0" },
     "contributes": {
-      "drivers": ["crmDeliverySyncDriver"]
+      "drivers": ["crmDeliverySyncDriver", "crmProjectSyncDriver"]
     }
   },
   "main": "./dist/index.js",

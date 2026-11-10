@@ -2,7 +2,7 @@ import { channelRecord, type IngestRecord } from "@regenic/domain";
 import { externalId, SOURCE, UNIT_KIND } from "./locators";
 import { shortHash } from "./time";
 
-export type StepKind = "context" | "mail" | "note" | "log" | "status" | "notice" | "summary" | "end";
+export type StepKind = "context" | "mail" | "note" | "log" | "status" | "notice" | "summary" | "order" | "end";
 export type StepActor = "user" | "assistant" | "system";
 
 export interface StepDraft {
@@ -22,19 +22,23 @@ export function stepRecord(input: {
   step: StepDraft;
   occurredAt: string;
   operation: "create" | "revise" | "tombstone";
+  /** 项目会话用自己的来源和单元类型。不传就是订单。 */
+  source?: string;
+  unitKind?: string;
 }): IngestRecord {
   const speaker = input.step.speaker.trim() || "系统";
+  const source = input.source ?? SOURCE;
   const record = channelRecord({
-    channel: SOURCE,
+    channel: source,
     kind: input.step.actor,
     direction: input.step.actor === "assistant" ? "outbound" : "inbound",
     external_id: externalId(input.orderId, input.step.suffix),
     occurred_at: input.occurredAt,
-    actor_id: `${SOURCE}:${input.step.actor}:${speaker}`,
+    actor_id: `${source}:${input.step.actor}:${speaker}`,
     actor_label: speaker,
     scope_id: input.orderId,
     scope_name: input.label,
-    unit_kind: UNIT_KIND,
+    unit_kind: input.unitKind ?? UNIT_KIND,
     type: "message",
     thread_id: input.orderId,
     text: input.step.tombstone ? "" : input.step.text,

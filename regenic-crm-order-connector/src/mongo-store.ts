@@ -10,6 +10,10 @@ import type {
   OrderDoc,
   PageQuery,
   ProjectDoc,
+  ProjectInfoDoc,
+  ProjectLogDoc,
+  ProjectOrderRow,
+  ProjectStore,
 } from "./model";
 
 const clients = new Map<string, Promise<MongoClient>>();
@@ -111,6 +115,162 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
       return pageOf(rows.map(mapDecision), limit);
     },
   };
+}
+
+export function projectStore(uri: string, dbName: string): ProjectStore {
+  const db = () => client(uri).then((mongo) => mongo.db(dbName));
+  return {
+    async listProjects(limit) {
+      let query = (await db())
+        .collection("projects")
+        .find(loose({ isDeleted: { $ne: true } }))
+        .sort({ createdTime: -1, _id: -1 })
+        .project({ name: 1 });
+      if (limit != null) {
+        query = query.limit(limit);
+      }
+      const rows = await query.toArray();
+      return rows.map((row) => ({ id: idOf(row._id), name: stringOf(row.name) }));
+    },
+
+    async listGoneProjects(ids) {
+      const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+      if (unique.length === 0) {
+        return [];
+      }
+      const alive = await (await db())
+        .collection("projects")
+        .find(loose({ _id: { $in: unique.map(asId) }, isDeleted: { $ne: true } }))
+        .project({ _id: 1 })
+        .toArray();
+      const kept = new Set(alive.map((row) => idOf(row._id)));
+      return unique.filter((id) => !kept.has(id));
+    },
+
+    async readProjectInfo(id) {
+      const row = await (await db()).collection("projects").findOne(loose({ _id: asId(id) }));
+      return row ? mapProjectInfo(row) : null;
+    },
+
+    async listProjectLogs(projectId, afterId, limit) {
+      const rows = await (await db())
+        .collection("project_operation_logs")
+        .find(loose({
+          projectId,
+          ...(afterId ? { _id: { $gt: asId(afterId) } } : {}),
+        }))
+        .sort({ _id: 1 })
+        .limit(limit)
+        .toArray();
+      return pageOf(rows.map(mapProjectLog), limit);
+    },
+
+    async listProjectOrders(projectId, limit) {
+      const rows = await (await db())
+        .collection("project_fields")
+        .find(openFilter({ projectId }))
+        .sort({ "selectedWorkflow.selectedTime": 1, _id: 1 })
+        .limit(limit)
+        .project(ORDER_ROW_FIELDS)
+        .toArray();
+      return rows.map(mapOrderRow);
+    },
+
+    async readOrderRows(ids) {
+      const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+      if (unique.length === 0) {
+        return [];
+      }
+      const rows = await (await db())
+        .collection("project_fields")
+        .find(loose({ _id: { $in: unique.map(asId) } }))
+        .project(ORDER_ROW_FIELDS)
+        .toArray();
+      return rows.map(mapOrderRow);
+    },
+  };
+}
+
+const ORDER_ROW_FIELDS = {
+  nickname: 1,
+  platform: 1,
+  bloggerLink: 1,
+  externalQuote: 1,
+  isDeleted: 1,
+  createdTime: 1,
+  "selectedWorkflow.status": 1,
+  "selectedWorkflow.selectedTime": 1,
+};
+
+function mapOrderRow(row: Document): ProjectOrderRow {
+  const workflow = asRecord(row.selectedWorkflow);
+  return {
+    id: idOf(row._id),
+    nickname: stringOf(row.nickname),
+    platform: stringOf(row.platform),
+    bloggerLink: stringOf(row.bloggerLink),
+    externalQuote: numberOf(row.externalQuote),
+    status: stringOf(workflow?.status),
+    isDeleted: row.isDeleted === true,
+    selectedTime: iso(workflow?.selectedTime),
+    createdTime: iso(row.createdTime),
+  };
+}
+
+function mapProjectInfo(row: Document): ProjectInfoDoc {
+  return {
+    ...mapProject(row),
+    status: stringOf(row.status),
+    level: stringOf(row.level),
+    isDeleted: row.isDeleted === true,
+    description: stringOf(row.description),
+    descriptionExtra: stringOf(row.descriptionExtra),
+    quoteMethod: stringOf(row.quoteMethod),
+    contactGroupApp: stringOf(row.contactGroupApp),
+    contactGroupName: stringOf(row.contactGroupName),
+    productUrl: stringOf(row.productUrl),
+    platforms: stringList(row.platforms),
+    targetCountries: stringList(row.targetCountries),
+    targetLanguages: stringList(row.targetLanguages),
+    currency: stringOf(row.currency),
+    totalBudget: decimalOf(row.totalBudget),
+    campaignNames: stringList(row.campaignNames),
+    businessManager: stringOf(row.businessManagerUserName),
+    operationsManager: stringOf(row.operationsManagerUserName),
+    pmManager: stringOf(row.pmManagerUserName),
+    startTime: iso(row.startTime),
+    endTime: iso(row.endTime),
+    deadline: iso(row.deadline),
+    createdTime: iso(row.createdTime),
+    updatedTime: iso(row.updatedTime),
+  };
+}
+
+function mapProjectLog(row: Document): ProjectLogDoc {
+  return {
+    id: idOf(row._id),
+    operationType: stringOf(row.operationType),
+    message: stringOf(row.message),
+    actorType: stringOf(row.actorType),
+    createdAt: iso(row.createdAt),
+    metadata: asRecord(row.metadata) ?? {},
+  };
+}
+
+/** 金额在库里可能是 Decimal128。 */
+function decimalOf(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (value && typeof value === "object" && "toString" in value) {
+    const parsed = Number(String(value));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 export function influencerMailScope(order: OrderDoc): Filter<Document>[] {

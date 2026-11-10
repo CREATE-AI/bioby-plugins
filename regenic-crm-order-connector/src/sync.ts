@@ -4,6 +4,7 @@ import { customerScriptFromAsk, customerScriptFromScene } from "./sentences";
 import { stepRecord, type StepDraft } from "./records";
 import { latestMailText } from "./mail-text";
 import { compactTime, shortHash, stepToken, withOffsets } from "./time";
+import { projectThreadId } from "./locators";
 import {
   isAutoNote,
   logChangesStatus,
@@ -123,6 +124,10 @@ export async function advanceDelivery(input: {
   if ((cursor.face ?? 0) < 2) {
     emit(order, label, cursor, records, summaryDrops(order, cursor));
     cursor.face = 2;
+  }
+  if ((cursor.face ?? 0) < 3) {
+    emit(order, label, cursor, records, contextRewrite(order, input.project, cursor));
+    cursor.face = 3;
   }
   let hasMore = false;
   let guard = 0;
@@ -555,6 +560,21 @@ function contextSteps(
   }];
 }
 
+/** 订单上下文加了所属项目。已经写过的上下文重写一次，规则才能顺着它找到项目会话。 */
+function contextRewrite(order: OrderDoc, project: ProjectDoc | null, cursor: OrderCursor): StepDraft[] {
+  if (!cursor.fp.context) {
+    return [];
+  }
+  return [{
+    suffix: "context",
+    at: order.createdTime || order.updatedTime || new Date(0).toISOString(),
+    kind: "context",
+    actor: "assistant",
+    speaker: "订单",
+    text: contextText(order, project),
+  }];
+}
+
 function storedFaceSteps(order: OrderDoc, project: ProjectDoc | null, cursor: OrderCursor): StepDraft[] {
   const steps: StepDraft[] = [];
   const at = order.updatedTime || order.createdTime || new Date(0).toISOString();
@@ -890,14 +910,15 @@ function contextText(order: OrderDoc, project: ProjectDoc | null): string {
     `对外报价：${order.externalQuote ?? ""}`,
     `达人报价：${order.influencerQuote ?? ""}`,
     `结算方式：${settlementLabel(order.settlementMethod)}`,
-    `合作权益：${order.cooperationBenefits ?? ""}`,
     `交付状态：${statusLabel(order.status)}`,
   ];
+  if (order.projectId) {
+    lines.push(`项目 ID：${order.projectId}`, `项目会话：${projectThreadId(order.projectId)}`);
+  }
   if (project) {
     lines.push(
       `brief：${project.briefText ?? ""}`,
       `brief 链接：${project.briefUrl ?? ""}`,
-      `权益：${project.benefits ?? ""}`,
       `产品信息：${project.brandProjectInfo ?? ""}`,
       `需求：${project.demands ?? ""}`,
     );

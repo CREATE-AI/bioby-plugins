@@ -128,6 +128,68 @@ export interface DeliveryStore {
   listDecisions(orderId: string, query: PageQuery, limit: number): Promise<IdPage<DecisionDoc>>;
 }
 
+export interface ProjectHead {
+  id: string;
+  name?: string;
+}
+
+export interface ProjectInfoDoc extends ProjectDoc {
+  status?: string;
+  level?: string;
+  isDeleted?: boolean;
+  description?: string;
+  descriptionExtra?: string;
+  quoteMethod?: string;
+  contactGroupApp?: string;
+  contactGroupName?: string;
+  productUrl?: string;
+  platforms?: string[];
+  targetCountries?: string[];
+  targetLanguages?: string[];
+  currency?: string;
+  totalBudget?: number | null;
+  campaignNames?: string[];
+  businessManager?: string;
+  operationsManager?: string;
+  pmManager?: string;
+  startTime?: string;
+  endTime?: string;
+  deadline?: string;
+  createdTime?: string;
+}
+
+export interface ProjectLogDoc {
+  id: string;
+  operationType?: string;
+  message?: string;
+  actorType?: string;
+  createdAt?: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface ProjectOrderRow {
+  id: string;
+  nickname?: string;
+  platform?: string;
+  bloggerLink?: string;
+  externalQuote?: number | null;
+  status?: string;
+  isDeleted?: boolean;
+  selectedTime?: string;
+  createdTime?: string;
+}
+
+export interface ProjectStore {
+  /** 没删除的项目，创建时间从新到旧。limit 为 null 时取全部。 */
+  listProjects(limit: number | null): Promise<ProjectHead[]>;
+  /** 给出的项目里，已经删除或者库里没有了的那些。 */
+  listGoneProjects(ids: string[]): Promise<string[]>;
+  readProjectInfo(id: string): Promise<ProjectInfoDoc | null>;
+  listProjectLogs(projectId: string, afterId: string | null, limit: number): Promise<IdPage<ProjectLogDoc>>;
+  listProjectOrders(projectId: string, limit: number): Promise<ProjectOrderRow[]>;
+  readOrderRows(ids: string[]): Promise<ProjectOrderRow[]>;
+}
+
 export function mailBelongs(mail: MailDoc, order: OrderDoc): boolean {
   const folder = (mail.folder ?? "").toUpperCase();
   if (folder !== "INBOX" && folder !== "SPAM" && folder !== "SENT") {

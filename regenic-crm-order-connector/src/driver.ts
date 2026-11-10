@@ -339,27 +339,50 @@ export function installConfig(config: Record<string, unknown>): Record<string, J
 }
 
 async function openStore(installation: ConnectorInstallation, host: ConnectorHost) {
-  const uri = await readUri(installation, host);
+  const { uri, db } = await readConnection(CONNECTOR_TYPE, installation, host);
+  return mongoStore(uri, db);
+}
+
+export async function readConnection(
+  connectorType: string,
+  installation: ConnectorInstallation,
+  host: ConnectorHost,
+): Promise<{ uri: string; db: string }> {
+  const uri = await readUri(connectorType, installation, host);
   const db = stringOf(installation.config.mongo_db) || databaseFromUri(uri);
   if (!db) {
     throw new ChannelDriverError("invalid_config", "没有库名");
   }
-  return mongoStore(uri, db);
+  return { uri, db };
 }
 
+/** 每读一次钥匙串都要起一个 security 进程。会话多了一起读会把文件句柄用光，所以留一分钟。 */
+const URI_CACHE_MS = 60_000;
+const uriCache = new Map<string, { at: number; uri: Promise<string | undefined> }>();
+
 async function readUri(
+  connectorType: string,
   installation: ConnectorInstallation,
   host: ConnectorHost,
 ): Promise<string> {
-  const stored = await host.secrets.read(CONNECTOR_TYPE, installation.id, "mongo_uri");
+  const key = `${connectorType}\u0000${installation.id}`;
+  const now = Date.now();
+  let cached = uriCache.get(key);
+  if (!cached || now - cached.at >= URI_CACHE_MS) {
+    cached = { at: now, uri: host.secrets.read(connectorType, installation.id, "mongo_uri") };
+    uriCache.set(key, cached);
+    cached.uri.catch(() => uriCache.delete(key));
+  }
+  const stored = await cached.uri;
   const uri = stored?.trim() || stringOf(installation.config.mongo_uri);
   if (!uri) {
+    uriCache.delete(key);
     throw new ChannelDriverError("missing_credentials", "没有 MongoDB 连接串");
   }
   return uri;
 }
 
-function pollResult(input: {
+export function pollResult(input: {
   installation: ConnectorInstallation;
   cursor: string | undefined;
   nextCursor: string;
@@ -441,7 +464,7 @@ function deliveryId(
   return `crm-delivery:${createHash("sha256").update(identity).digest("hex")}`;
 }
 
-function asSyncError(error: unknown): ChannelDriverError {
+export function asSyncError(error: unknown): ChannelDriverError {
   if (error instanceof ChannelDriverError) {
     return error;
   }
@@ -580,7 +603,7 @@ function chooserTitle(row: OpenOrderHead): string {
   return [row.nickname, row.projectName, row.bloggerLink].filter((item) => item?.trim()).join(" ");
 }
 
-function boundedInt(value: unknown, fallback: number, min: number, max: number): number {
+export function boundedInt(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) {
     return fallback;
@@ -588,7 +611,7 @@ function boundedInt(value: unknown, fallback: number, min: number, max: number):
   return Math.max(min, Math.min(max, Math.floor(parsed)));
 }
 
-function databaseFromUri(uri: string): string {
+export function databaseFromUri(uri: string): string {
   const match = uri.match(/^mongodb(?:\+srv)?:\/\/[^/]+\/([^?]+)/);
   return match?.[1] ? decodeURIComponent(match[1]) : "";
 }

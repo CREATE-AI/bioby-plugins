@@ -55,13 +55,23 @@ export function parseDirectoryCursor(raw: string | null): DirectoryCursor {
   }
 }
 
-export async function listDirectoryPage(input: {
+export interface DirectoryHead {
+  id: string;
+}
+
+export async function listDirectoryPage<T extends DirectoryHead = OpenOrderHead>(input: {
   cursor: string | null;
   concurrency: number;
   now: number;
   memory?: DirectoryMemory;
   restartWaitMs?: number;
-  listOpenIds: (afterId: string | null, limit: number) => Promise<OpenOrderHead[]>;
+  listOpenIds: (afterId: string | null, limit: number) => Promise<T[]>;
+  /** 默认是订单会话。项目会话传自己的 stream_key、名字和 kind。 */
+  member?: (id: string) => { stream_key: string; thread_id: string };
+  labelOf?: (row: T) => string;
+  kind?: string;
+  /** 掉出名单的会话里，哪些要先写结束再放手。默认全部都要。 */
+  needsEnd?: (missing: string[]) => Promise<string[]>;
 }): Promise<SyncDirectoryPage> {
   const state = input.memory ?? memory;
   const waitMs = input.restartWaitMs ?? RESTART_WAIT_MS;
@@ -69,6 +79,8 @@ export async function listDirectoryPage(input: {
   const cursor = parseDirectoryCursor(input.cursor);
   const limit = Math.max(1, input.concurrency);
   const labels = new Map<string, string>();
+  const labelOf = input.labelOf ?? ((row: T) => headLabel(row as unknown as OpenOrderHead));
+  const member = input.member ?? ((id: string) => ({ stream_key: streamKey(id), thread_id: threadId(id) }));
 
   if (!cursor.scanDone) {
     const page = await input.listOpenIds(cursor.afterId, limit);
@@ -76,7 +88,7 @@ export async function listDirectoryPage(input: {
       if (!cursor.seen.includes(row.id)) {
         cursor.seen.push(row.id);
       }
-      labels.set(row.id, headLabel(row));
+      labels.set(row.id, labelOf(row));
     }
     const last = page[page.length - 1];
     cursor.afterId = last ? last.id : cursor.afterId;
@@ -93,10 +105,9 @@ export async function listDirectoryPage(input: {
     }
     cursor.emitted.push(id);
     members.push({
-      stream_key: streamKey(id),
-      thread_id: threadId(id),
+      ...member(id),
       label: labels.get(id) || id,
-      kind: "order",
+      kind: input.kind ?? "order",
     });
   }
 
@@ -105,9 +116,9 @@ export async function listDirectoryPage(input: {
     state.previousIds == null
       ? []
       : state.previousIds.filter((id) => !cursor.seen.includes(id));
-  const endsReady = missing.every((id) => state.endWritten.has(id));
   const restartReady = state.previousIds != null || input.now - state.startedAt >= waitMs;
-  const ready = cursor.scanDone && !pendingEmit && endsReady && restartReady;
+  const ready = cursor.scanDone && !pendingEmit && restartReady &&
+    await endsWritten(missing.filter((id) => !state.endWritten.has(id)), input.needsEnd);
   const complete = ready && !opening;
   if (complete) {
     state.previousIds = [...cursor.seen];
@@ -119,11 +130,24 @@ export async function listDirectoryPage(input: {
   };
 }
 
-export function pageSelectedHeads(
-  heads: OpenOrderHead[],
+async function endsWritten(
+  waiting: string[],
+  needsEnd: ((missing: string[]) => Promise<string[]>) | undefined,
+): Promise<boolean> {
+  if (waiting.length === 0) {
+    return true;
+  }
+  if (!needsEnd) {
+    return false;
+  }
+  return (await needsEnd(waiting)).length === 0;
+}
+
+export function pageSelectedHeads<T extends DirectoryHead>(
+  heads: T[],
   afterId: string | null,
   limit: number,
-): OpenOrderHead[] {
+): T[] {
   if (limit <= 0) {
     return [];
   }

@@ -38,7 +38,8 @@ const KIND_RANK: Record<string, number> = {
   status: 4,
   notice: 5,
   summary: 6,
-  end: 7,
+  order: 7,
+  end: 8,
 };
 
 export interface TimedStep {
