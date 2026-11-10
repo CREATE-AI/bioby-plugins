@@ -41,7 +41,7 @@ test("step id stays on the delivery conversation", () => {
   assert.equal(conversationId(SOURCE, external), "crm-delivery:order1");
 });
 
-test("install rejects a bad Mongo URI and keeps the secret field for the host to move", () => {
+test("install rejects a bad Mongo URI and keeps the secret field for the host to move", async () => {
   assert.throws(() => installConfig({ mongo_uri: "http://localhost" }), /连接串/);
   const config = installConfig({
     mongo_uri: "mongodb://localhost:27017/crm",
@@ -70,6 +70,24 @@ test("install rejects a bad Mongo URI and keeps the secret field for the host to
   });
   assert.equal(recent.selection, "recent");
   assert.equal(recent.recent_limit, 10);
+  const kept = installConfig({ mongo_db: "crm", selection: "all" });
+  assert.equal(kept.mongo_uri, undefined);
+  assert.equal(kept.mongo_db, "crm");
+  const catalog = crmDeliverySyncDriver.installCatalog();
+  assert.equal(catalog.form_version, 2);
+  assert.deepEqual(catalog.fields.map((field) => field.group), [
+    "group.connection",
+    "group.connection",
+    "group.scope",
+    "group.scope",
+    "group.scope",
+    "group.advanced",
+    "group.advanced",
+  ]);
+  assert.equal(catalog.fields.find((field) => field.key === "mongo_uri").widget, "password");
+  assert.equal(catalog.fields.every((field) => field.type), true);
+  const options = await crmDeliverySyncDriver.listCatalogFieldOptions({ env: {} });
+  assert.deepEqual(options, { order_ids: [] });
 });
 
 test("selected orders page in the saved order", () => {

@@ -1,6 +1,7 @@
 import {
   ChannelDriverError,
   INGEST_SCHEMA_VERSION,
+  readInstallSecret,
   type ChannelDriver,
   type ConnectorHost,
   type ConnectorInstallation,
@@ -10,6 +11,7 @@ import {
   type SyncSource,
 } from "@regenic/domain";
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import {
   listDirectoryPage,
   markDeliveryEndWritten,
@@ -171,6 +173,7 @@ export const crmDeliverySyncDriver: ChannelDriver = {
 
   installCatalog() {
     return {
+      form_version: 2 as const,
       title: "catalog.title",
       channel_label: "catalog.channelLabel",
       description: "catalog.description",
@@ -179,32 +182,32 @@ export const crmDeliverySyncDriver: ChannelDriver = {
       fields: [
         {
           key: "mongo_uri",
+          type: "string" as const,
+          widget: "password" as const,
           label: "field.mongoUri",
+          description: "field.mongoUri.description",
+          group: "group.connection",
           required: true,
           secret: true,
           placeholder: "field.mongoUri.placeholder",
         },
         {
           key: "mongo_db",
+          type: "string" as const,
+          widget: "text" as const,
           label: "field.mongoDb",
+          description: "field.mongoDb.description",
+          group: "group.connection",
           required: false,
           placeholder: "field.mongoDb.placeholder",
         },
         {
-          key: "refresh_interval_ms",
-          label: "field.refresh",
-          required: false,
-          default: String(DEFAULT_REFRESH_MS),
-        },
-        {
-          key: "sync_concurrency",
-          label: "field.concurrency",
-          required: false,
-          default: String(DEFAULT_CONCURRENCY),
-        },
-        {
           key: "selection",
+          type: "string" as const,
+          widget: "select" as const,
           label: "field.selection",
+          description: "field.selection.description",
+          group: "group.scope",
           required: true,
           default: "all",
           options: [
@@ -215,20 +218,56 @@ export const crmDeliverySyncDriver: ChannelDriver = {
         },
         {
           key: "order_ids",
+          type: "string_array" as const,
+          widget: "multi_select" as const,
           label: "field.orderIds",
+          description: "field.orderIds.description",
+          group: "group.scope",
           required: true,
           multiple: true,
+          dynamic_options: true,
           placeholder: "field.orderIds.placeholder",
           option_labels_key: "order_names",
           visible_when: { field: "selection", value: "pick" },
         },
         {
           key: "recent_limit",
+          type: "number" as const,
+          widget: "number" as const,
           label: "field.recentLimit",
+          description: "field.recentLimit.description",
+          group: "group.scope",
           required: false,
-          default: String(DEFAULT_RECENT),
-          placeholder: "field.recentLimit.placeholder",
+          default: DEFAULT_RECENT,
+          min: 1,
+          max: 200,
           visible_when: { field: "selection", value: "recent" },
+        },
+        {
+          key: "refresh_interval_ms",
+          type: "number" as const,
+          widget: "number" as const,
+          label: "field.refresh",
+          description: "field.refresh.description",
+          group: "group.advanced",
+          advanced: true,
+          required: false,
+          default: DEFAULT_REFRESH_MS,
+          min: 5_000,
+          max: 3_600_000,
+        },
+        {
+          key: "sync_concurrency",
+          type: "number" as const,
+          widget: "number" as const,
+          label: "field.concurrency",
+          description: "field.concurrency.description",
+          group: "group.advanced",
+          advanced: true,
+          required: false,
+          default: DEFAULT_CONCURRENCY,
+          min: 1,
+          max: 20,
         },
       ],
       install_confirm: {
@@ -239,22 +278,15 @@ export const crmDeliverySyncDriver: ChannelDriver = {
     };
   },
 
-  async listCatalogFieldOptions({ installation, host }) {
-    if (!installation || !host) {
+  async listCatalogFieldOptions({ env }) {
+    const saved = await readSavedDeliveryConnection(env);
+    if (!saved) {
       return { order_ids: [] };
     }
     try {
-      const store = await openStore(installation, host);
-      const heads = await listChooserHeads(store);
-      return {
-        order_ids: heads.map((row) => ({
-          value: row.id,
-          label: { literal: chooserLabel(row) },
-          title: chooserTitle(row),
-        })),
-      };
+      return { order_ids: await cachedOrderOptions(saved) };
     } catch {
-      return { order_ids: [] };
+      throw new ChannelDriverError("sync_failed", "读取订单列表失败");
     }
   },
 
@@ -277,13 +309,13 @@ export const crmDeliverySyncDriver: ChannelDriver = {
 
 export function installConfig(config: Record<string, unknown>): Record<string, JsonValue> {
   const uri = stringOf(config.mongo_uri);
-  if (!uri || !/^mongodb(\+srv)?:\/\//.test(uri)) {
+  if (uri && !/^mongodb(\+srv)?:\/\//.test(uri)) {
     throw new ChannelDriverError("invalid_config", "MongoDB 连接串不对");
   }
-  const db = stringOf(config.mongo_db) || databaseFromUri(uri);
+  const db = stringOf(config.mongo_db) || (uri ? databaseFromUri(uri) : "");
   const selection = selectionOf(config);
   const stored: Record<string, JsonValue> = {
-    mongo_uri: uri,
+    ...(uri ? { mongo_uri: uri } : {}),
     ...(db ? { mongo_db: db } : {}),
     refresh_interval_ms: boundedInt(config.refresh_interval_ms, DEFAULT_REFRESH_MS, 5_000, 3_600_000),
     sync_concurrency: boundedInt(config.sync_concurrency, DEFAULT_CONCURRENCY, 1, 20),
@@ -446,6 +478,90 @@ function csvList(value: unknown): string[] {
     return value.map((item) => stringOf(item)).filter((item) => item.length > 0);
   }
   return stringOf(value).split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+}
+
+const ORDER_OPTION_CACHE_MS = 15_000;
+let orderOptionCache: {
+  key: string;
+  at: number;
+  options: Array<{ value: string; label: { literal: string }; title: string }>;
+} | undefined;
+
+async function readSavedDeliveryConnection(
+  env: NodeJS.ProcessEnv,
+): Promise<{ uri: string; db: string } | undefined> {
+  const path = env.REGENIC_DATABASE?.trim();
+  if (!path) {
+    return undefined;
+  }
+  let database: DatabaseSync;
+  try {
+    database = new DatabaseSync(path, { readOnly: true, timeout: 1_000, enableForeignKeyConstraints: false });
+  } catch {
+    return undefined;
+  }
+  try {
+    const row = database.prepare(
+      `SELECT id, config_json FROM connector_installations
+       WHERE connector_type = ?
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+    ).get(CONNECTOR_TYPE);
+    if (!row || typeof row !== "object") {
+      return undefined;
+    }
+    const id = "id" in row && typeof row.id === "string" ? row.id.trim() : "";
+    const rawConfig = "config_json" in row && typeof row.config_json === "string" ? row.config_json : "";
+    if (!id) {
+      return undefined;
+    }
+    const config = parseStoredConfig(rawConfig);
+    const stored = await readInstallSecret(CONNECTOR_TYPE, id, "mongo_uri");
+    const uri = stored?.trim() || stringOf(config.mongo_uri);
+    const db = stringOf(config.mongo_db) || databaseFromUri(uri);
+    if (!uri || !db) {
+      return undefined;
+    }
+    return { uri, db };
+  } catch {
+    return undefined;
+  } finally {
+    database.close();
+  }
+}
+
+function parseStoredConfig(raw: string): Record<string, unknown> {
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+async function cachedOrderOptions(saved: { uri: string; db: string }): Promise<Array<{
+  value: string;
+  label: { literal: string };
+  title: string;
+}>> {
+  const key = createHash("sha256").update(`${saved.db}\u0000${saved.uri}`).digest("hex");
+  const now = Date.now();
+  if (orderOptionCache && orderOptionCache.key === key && now - orderOptionCache.at < ORDER_OPTION_CACHE_MS) {
+    return orderOptionCache.options;
+  }
+  const heads = await listChooserHeads(mongoStore(saved.uri, saved.db));
+  const options = heads.map((row) => ({
+    value: row.id,
+    label: { literal: chooserLabel(row) },
+    title: chooserTitle(row),
+  }));
+  orderOptionCache = { key, at: now, options };
+  return options;
 }
 
 function chooserLabel(row: OpenOrderHead): string {
