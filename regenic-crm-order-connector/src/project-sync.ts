@@ -7,7 +7,7 @@ import {
 } from "./locators";
 import type { ProjectInfoDoc, ProjectLogDoc, ProjectOrderRow, ProjectStore } from "./model";
 import { stepRecord, type StepDraft } from "./records";
-import { isOpenStatus, statusLabel } from "./status";
+import { statusLabel } from "./status";
 import { compactTime, shortHash, stepToken, withOffsets } from "./time";
 
 export interface ProjectCursor {
@@ -17,7 +17,7 @@ export interface ProjectCursor {
   infoFp?: string;
   status?: string;
   logAfter: string | null;
-  /** 还在交付中、已经写进项目会话的订单。 */
+  /** 已经写进项目会话、且仍在交付视图里的订单。 */
   orders: string[];
   orderSkip: number;
   ended?: boolean;
@@ -254,7 +254,7 @@ export function projectInfoText(project: ProjectInfoDoc): string {
   add("项目权益", project.benefits);
   const split = Boolean(project.quoteMethod || project.contactGroupApp || project.contactGroupName || project.descriptionExtra);
   add(split ? "其他说明" : "项目描述", split ? project.descriptionExtra : project.description);
-  lines.push("这个项目里每张还在交付的订单，在本会话里各占一条，写着它的订单会话。");
+  lines.push("这个项目里每张还在交付视图的订单，在本会话里各占一条，写着它的订单会话。");
   return lines.join("\n");
 }
 
@@ -295,10 +295,10 @@ export function orderLine(row: ProjectOrderRow): string {
   }
   if (row.isDeleted) {
     lines.push("交付状态：订单已删除");
-  } else if (isOpenStatus(row.status)) {
-    lines.push(`交付状态：${statusLabel(row.status)}`);
+  } else if (row.inDeliveryView === false) {
+    lines.push(`交付状态：${statusLabel(row.status)}（已不在交付视图）`);
   } else {
-    lines.push(`交付状态：${statusLabel(row.status)}（已不在交付中）`);
+    lines.push(`交付状态：${statusLabel(row.status)}`);
   }
   if (row.externalQuote != null) {
     lines.push(`对外报价：${row.externalQuote}`);

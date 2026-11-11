@@ -29,6 +29,8 @@ export interface OrderDoc {
   bargainServiceFeeUsd?: number | null;
   bargainValueAddedFeeUsd?: number | null;
   status?: string;
+  /** viewFlags.inDeliveryView。只有交付视图里的订单才继续同步。 */
+  inDeliveryView?: boolean;
   /** selectedWorkflow.finalScriptLink，最终脚本链接。 */
   scriptLink?: string;
   /** selectedWorkflow.publishLinks，没有列表时用 publishLink。 */
@@ -184,6 +186,7 @@ export interface ProjectOrderRow {
   bloggerLink?: string;
   externalQuote?: number | null;
   status?: string;
+  inDeliveryView?: boolean;
   isDeleted?: boolean;
   selectedTime?: string;
   createdTime?: string;

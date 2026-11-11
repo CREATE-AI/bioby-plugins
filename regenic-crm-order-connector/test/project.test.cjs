@@ -83,7 +83,7 @@ test("later polls add new activity, a status message, and update order lines", a
   const first = await runUntilLive(projectInfo(), store);
   store.logs.push(log("l2", "PROJECT_RESUBMIT", { metadata: { fieldCount: 2 } }));
   store.orders = [orderRow("a", { status: "PENDING_PUBLISH" }), orderRow("c", { nickname: "小刚" })];
-  store.rows.set("b", orderRow("b", { status: "SETTLED_COMPLETED" }));
+  store.rows.set("b", orderRow("b", { status: "SETTLED_COMPLETED", inDeliveryView: false }));
   const next = await advanceProject({
     projectId: "p1",
     project: projectInfo({ status: "PAUSED", demands: "新需求", updatedTime: "2026-11-08T00:00:00.000Z" }),
@@ -100,7 +100,7 @@ test("later polls add new activity, a status message, and update order lines", a
   assert.equal(find("order-a").operation, "revise");
   assert.match(recordText(find("order-a")), /待发布/);
   assert.equal(find("order-b").operation, "revise");
-  assert.match(recordText(find("order-b")), /已结清（已不在交付中）/);
+  assert.match(recordText(find("order-b")), /已结清（已不在交付视图）/);
   assert.equal(find("order-c").operation, "create");
   assert.deepEqual(next.cursor.orders, ["a", "c"]);
 
@@ -174,6 +174,7 @@ test("order context points to its project conversation", async () => {
       projectId: "p1",
       nickname: "小明",
       status: "FOLLOWING",
+      inDeliveryView: true,
       createdTime: "2026-11-01T00:00:00.000Z",
       updatedTime: "2026-11-06T09:00:00.000Z",
       follows: [],
@@ -198,6 +199,7 @@ test("an order conversation written before the project link gets its context rew
     projectId: "p1",
     nickname: "小明",
     status: "FOLLOWING",
+    inDeliveryView: true,
     createdTime: "2026-11-01T00:00:00.000Z",
     updatedTime: "2026-11-06T09:00:00.000Z",
     follows: [],
@@ -229,6 +231,7 @@ test("order context includes script, draft and publish links", async () => {
       id: "a",
       nickname: "小明",
       status: "VIDEO_DRAFT_REVIEWING",
+      inDeliveryView: true,
       scriptLink: "https://example.com/script",
       publishLinks: ["https://example.com/post"],
       createdTime: "2026-11-01T00:00:00.000Z",
@@ -297,6 +300,7 @@ function orderRow(id, extra = {}) {
     bloggerLink: `https://example/${id}`,
     externalQuote: 80,
     status: "FOLLOWING",
+    inDeliveryView: true,
     selectedTime: "2026-11-03T00:00:00.000Z",
     ...extra,
   };

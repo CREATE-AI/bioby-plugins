@@ -1,5 +1,4 @@
 import { MongoClient, ObjectId, type Db, type Document, type Filter } from "mongodb";
-import { OPEN_STATUSES } from "./status";
 import type {
   DecisionDoc,
   DeliveryStore,
@@ -198,6 +197,7 @@ const ORDER_ROW_FIELDS = {
   externalQuote: 1,
   isDeleted: 1,
   createdTime: 1,
+  "viewFlags.inDeliveryView": 1,
   "selectedWorkflow.status": 1,
   "selectedWorkflow.selectedTime": 1,
 };
@@ -211,6 +211,7 @@ function mapOrderRow(row: Document): ProjectOrderRow {
     bloggerLink: stringOf(row.bloggerLink),
     externalQuote: numberOf(row.externalQuote),
     status: stringOf(workflow?.status),
+    inDeliveryView: asRecord(row.viewFlags)?.inDeliveryView === true,
     isDeleted: row.isDeleted === true,
     selectedTime: iso(workflow?.selectedTime),
     createdTime: iso(row.createdTime),
@@ -393,7 +394,7 @@ async function withProjects(database: Db, rows: Document[]): Promise<OpenOrderHe
 function openFilter(extra: Record<string, unknown> = {}): Filter<Document> {
   return loose({
     isDeleted: { $ne: true },
-    "selectedWorkflow.status": { $in: [...OPEN_STATUSES] },
+    "viewFlags.inDeliveryView": true,
     ...extra,
   });
 }
@@ -417,6 +418,7 @@ function mapOrder(row: Document): OrderDoc {
     bargainServiceFeeUsd: numberOf(row.bargainServiceFeeUsd),
     bargainValueAddedFeeUsd: numberOf(row.bargainValueAddedFeeUsd),
     status: stringOf(workflow?.status),
+    inDeliveryView: asRecord(row.viewFlags)?.inDeliveryView === true,
     scriptLink: stringOf(workflow?.finalScriptLink),
     publishLinks: stringsOf(workflow?.publishLinks).length > 0
       ? stringsOf(workflow?.publishLinks)

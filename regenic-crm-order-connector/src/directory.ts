@@ -3,7 +3,8 @@ import { RESTART_WAIT_MS, streamKey, threadId } from "./locators";
 import type { OpenOrderHead } from "./model";
 
 export interface DirectoryCursor {
-  v: 1;
+  /** 2：按交付视图重扫。旧游标按状态名单翻到一半，接着用会漏掉排在前面的订单。 */
+  v: 2;
   afterId: string | null;
   seen: string[];
   emitted: string[];
@@ -36,22 +37,22 @@ export function markDeliveryEndWritten(orderId: string): void {
 
 export function parseDirectoryCursor(raw: string | null): DirectoryCursor {
   if (!raw) {
-    return { v: 1, afterId: null, seen: [], emitted: [], scanDone: false };
+    return { v: 2, afterId: null, seen: [], emitted: [], scanDone: false };
   }
   try {
     const parsed = JSON.parse(raw) as Partial<DirectoryCursor>;
-    if (parsed.v !== 1 || !Array.isArray(parsed.seen) || !Array.isArray(parsed.emitted)) {
-      return { v: 1, afterId: null, seen: [], emitted: [], scanDone: false };
+    if (parsed.v !== 2 || !Array.isArray(parsed.seen) || !Array.isArray(parsed.emitted)) {
+      return { v: 2, afterId: null, seen: [], emitted: [], scanDone: false };
     }
     return {
-      v: 1,
+      v: 2,
       afterId: typeof parsed.afterId === "string" ? parsed.afterId : null,
       seen: parsed.seen.filter((id) => typeof id === "string"),
       emitted: parsed.emitted.filter((id) => typeof id === "string"),
       scanDone: parsed.scanDone === true,
     };
   } catch {
-    return { v: 1, afterId: null, seen: [], emitted: [], scanDone: false };
+    return { v: 2, afterId: null, seen: [], emitted: [], scanDone: false };
   }
 }
 

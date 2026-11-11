@@ -1,6 +1,6 @@
 # CRM 交付订单和项目连接器
 
-私有插件。直接读 CRM 的 MongoDB，把还在交付中的订单、以及没删除的项目，收成 Regenic 会话。不走 CRM 的 HTTP，也不改 CRM。
+私有插件。直接读 CRM 的 MongoDB，把交付视图里的订单、以及没删除的项目，收成 Regenic 会话。不走 CRM 的 HTTP，也不改 CRM。
 
 和 `regenic-crm-connector` 分开。AI 内审仍是 `crm:order:<订单id>`。这里的订单会话是 `crm-delivery:<订单id>`，项目会话是 `crm-project:<项目id>`。两个连接器分开安装。
 

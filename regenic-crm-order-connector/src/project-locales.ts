@@ -5,7 +5,7 @@ export const projectLocaleTables = defineLocaleTables({
     "catalog.title": "CRM projects",
     "catalog.channelLabel": "CRM project",
     "catalog.description":
-      "Private plugin. Reads CRM projects from MongoDB and keeps one conversation per project, with its activity and in-delivery orders.",
+      "Private plugin. Reads CRM projects from MongoDB and keeps one conversation per project, with its activity and orders in the delivery view.",
     "catalog.credentialHint":
       "The MongoDB URI is stored in the keychain. It is not kept in the installation config.",
     "group.connection": "Database",
@@ -38,7 +38,7 @@ export const projectLocaleTables = defineLocaleTables({
     "catalog.title": "CRM 项目",
     "catalog.channelLabel": "CRM 项目",
     "catalog.description":
-      "私有插件。直接读 CRM 的 MongoDB，每个项目收成一个会话，里面有项目信息、项目动态和还在交付的订单。不写回。",
+      "私有插件。直接读 CRM 的 MongoDB，每个项目收成一个会话，里面有项目信息、项目动态和交付视图里的订单。不写回。",
     "catalog.credentialHint": "MongoDB 连接串放进钥匙串，不留在安装配置里。",
     "group.connection": "数据库",
     "group.scope": "同步哪些项目",

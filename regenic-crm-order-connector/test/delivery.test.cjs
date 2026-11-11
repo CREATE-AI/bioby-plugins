@@ -173,11 +173,11 @@ test("directory waits until the id scan finishes and the end step is written", a
   assert.deepEqual(memory.previousIds, ["a", "b"]);
 });
 
-test("a closed order writes one end step and can be marked finished", async () => {
+test("an order that left the delivery view writes one end step and can be marked finished", async () => {
   const store = emptyStore();
   const advanced = await advanceDelivery({
     orderId: "a",
-    order: order({ status: "CANCELLED" }),
+    order: order({ status: "CANCELLED", inDeliveryView: false }),
     project: null,
     store,
     cursor: emptyOrderCursor(),
@@ -186,10 +186,25 @@ test("a closed order writes one end step and can be marked finished", async () =
   });
   assert.equal(advanced.wroteEnd, true);
   assert.equal(advanced.records.length, 1);
-  assert.match(advanced.records[0].external_id, /^a:end-CANCELLED-/);
+  assert.match(advanced.records[0].external_id, /^a:end-NOT_IN_DELIVERY_VIEW-/);
+  assert.match(recordText(advanced.records[0]), /已经不在交付视图/);
   assert.equal(advanced.records[0].external_id.includes(":"), true);
   assert.equal(advanced.records[0].external_id.split(":").length, 2);
   markDeliveryEndWritten("a");
+});
+
+test("an abandoned order still in the delivery view keeps syncing", async () => {
+  const advanced = await advanceDelivery({
+    orderId: "a",
+    order: order({ status: "ABANDONED", inDeliveryView: true }),
+    project: null,
+    store: emptyStore(),
+    cursor: emptyOrderCursor(),
+    pageSize: 20,
+    now: "2026-11-06T10:00:00.000Z",
+  });
+  assert.equal(advanced.wroteEnd, false);
+  assert.equal(advanced.records.some((record) => String(record.external_id).includes(":end-")), false);
 });
 
 test("status log is kept and a second status step is not added", async () => {
@@ -676,6 +691,7 @@ function order(extra = {}) {
     cooperationBenefits: "一条视频",
     bargainServiceFeeUsd: 12,
     status: "FOLLOWING",
+    inDeliveryView: true,
     createdTime: "2026-11-01T00:00:00.000Z",
     updatedTime: "2026-11-06T09:00:00.000Z",
     follows: [],

@@ -1,5 +1,5 @@
 import type { IngestRecord } from "@regenic/domain";
-import { isOpenStatus, statusLabel } from "./status";
+import { statusLabel } from "./status";
 import { customerScriptFromAsk, customerScriptFromScene } from "./sentences";
 import { stepRecord, type StepDraft } from "./records";
 import { latestMailText } from "./mail-text";
@@ -112,7 +112,7 @@ export async function advanceDelivery(input: {
 }): Promise<{ records: IngestRecord[]; cursor: OrderCursor; hasMore: boolean; wroteEnd: boolean }> {
   const cursor = input.cursor;
   cursor.seq = (cursor.seq ?? 0) + 1;
-  if (!input.order || input.order.isDeleted || !isOpenStatus(input.order.status)) {
+  if (!input.order || input.order.isDeleted || input.order.inDeliveryView !== true) {
     return finishClosed(input.orderId, input.order, input.project, cursor, input.now);
   }
   const order = input.order;
@@ -325,12 +325,15 @@ function finishClosed(
   cursor: OrderCursor,
   now: string,
 ): { records: IngestRecord[]; cursor: OrderCursor; hasMore: boolean; wroteEnd: boolean } {
-  const status = order?.isDeleted || !order ? "DELETED" : (order.status ?? "DELETED");
+  const leftView = Boolean(order) && order?.isDeleted !== true;
+  const status = leftView ? "NOT_IN_DELIVERY_VIEW" : "DELETED";
   const at = order?.updatedTime || now;
   const suffix = `end-${stepToken(status)}-${compactTime(at)}`;
-  const text = order
-    ? `订单结束：${statusLabel(status)}`
-    : "订单已经不在库里，按删除结束。";
+  const text = !order
+    ? "订单已经不在库里，按删除结束。"
+    : order.isDeleted
+      ? "订单结束：已删除"
+      : "订单已经不在交付视图，这个会话不再更新。";
   const label = order ? conversationLabel(order, project) : orderId;
   const records = emit(
     { id: orderId },
