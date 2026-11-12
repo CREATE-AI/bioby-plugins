@@ -152,11 +152,16 @@ export function pageSelectedHeads<T extends DirectoryHead>(
   if (limit <= 0) {
     return [];
   }
-  const start = afterId ? heads.findIndex((row) => row.id === afterId) + 1 : 0;
-  if (afterId && start <= 0) {
-    return [];
+  if (!afterId) {
+    return heads.slice(0, limit);
   }
-  return heads.slice(start, start + limit);
+  const index = heads.findIndex((row) => row.id === afterId);
+  // 锚点不在这份名单里时从头再扫。名单换过、或游标是上一轮留下的，不能把空页当成已经扫完。
+  // 锚点是最后一条时，下一页才是空的。
+  if (index < 0) {
+    return heads.slice(0, limit);
+  }
+  return heads.slice(index + 1, index + 1 + limit);
 }
 
 function headLabel(row: OpenOrderHead): string {

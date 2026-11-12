@@ -29,7 +29,7 @@ const { influencerMailScope } = require("../dist/mongo-store");
 const { compactTime } = require("../dist/time");
 const { SOURCE } = require("../dist/locators");
 const { brandIdsOf, pageChoices } = require("../dist/brands");
-const { clearPushArmed, markPushArmed, pushArmed, pushRequestAccepted, pushToken, readPushProgress, resetPushState, splitPushLanes } = require("../dist/push");
+const { clearPushArmed, markPushArmed, pushArmed, pushBatchAdvances, pushRequestAccepted, pushToken, readPushProgress, resetPushState, runPushQueues, splitPushLanes } = require("../dist/push");
 
 test("a typed database address is used before a saved one", () => {
   assert.deepEqual(connectionFromFormValues({
@@ -86,6 +86,73 @@ test("push progress counts orders that already have a conversation", () => {
     rmSync(path, { force: true });
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a quarantined page moves on and an unfinished page stays", () => {
+  assert.equal(pushBatchAdvances({
+    status: "completed",
+    accepted: 1,
+    duplicate: 0,
+    quarantined: 1,
+    sent: 2,
+  }), true);
+  assert.equal(pushBatchAdvances({
+    status: "completed",
+    accepted: 2,
+    duplicate: 0,
+    quarantined: 0,
+    sent: 2,
+  }), true);
+  assert.equal(pushBatchAdvances({
+    status: "running",
+    accepted: 0,
+    duplicate: 0,
+    quarantined: 0,
+    sent: 2,
+  }), false);
+  assert.equal(pushBatchAdvances({
+    status: "completed",
+    accepted: 1,
+    duplicate: 0,
+    quarantined: 0,
+    sent: 2,
+  }), false);
+});
+
+test("new orders and rechecks share one concurrency limit", async () => {
+  let current = 0;
+  let peak = 0;
+  let freshLeft = 3;
+  let recheckLeft = 2;
+  const run = async (id) => {
+    if (id.startsWith("r")) {
+      assert.equal(freshLeft, 0);
+    }
+    if (id === "g1") {
+      assert.equal(recheckLeft, 0);
+    }
+    current += 1;
+    peak = Math.max(peak, current);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    current -= 1;
+    if (id.startsWith("n")) {
+      freshLeft -= 1;
+    }
+    if (id.startsWith("r")) {
+      recheckLeft -= 1;
+    }
+  };
+  await runPushQueues({
+    fresh: ["n1", "n2", "n3"],
+    recheck: ["r1", "r2"],
+    gone: ["g1"],
+    concurrency: 2,
+    signal: new AbortController().signal,
+    run,
+  });
+  assert.equal(peak, 2);
+  assert.equal(freshLeft, 0);
+  assert.equal(recheckLeft, 0);
 });
 
 test("new orders and rechecks use separate lanes", () => {
@@ -201,7 +268,33 @@ test("selected orders page in the saved order", () => {
   const heads = ["a", "b", "c"].map((id) => ({ id }));
   assert.deepEqual(pageSelectedHeads(heads, null, 2).map((row) => row.id), ["a", "b"]);
   assert.deepEqual(pageSelectedHeads(heads, "b", 2).map((row) => row.id), ["c"]);
-  assert.deepEqual(pageSelectedHeads(heads, "missing", 2), []);
+  assert.deepEqual(pageSelectedHeads(heads, "c", 2), []);
+  assert.deepEqual(pageSelectedHeads(heads, "missing", 2).map((row) => row.id), ["a", "b"]);
+});
+
+test("a stale picked-list cursor restarts instead of finishing empty", async () => {
+  const heads = ["a", "b", "c"].map((id) => ({ id, nickname: id, projectName: "春季" }));
+  const memory = freshDirectoryMemory(0);
+  const stale = JSON.stringify({
+    v: 2,
+    afterId: "missing",
+    seen: [],
+    emitted: [],
+    scanDone: false,
+  });
+  const page = await listDirectoryPage({
+    cursor: stale,
+    concurrency: 2,
+    now: 0,
+    memory,
+    restartWaitMs: 1_000,
+    listOpenIds: async (afterId, limit) => pageSelectedHeads(heads, afterId, limit),
+  });
+  assert.equal(page.complete, false);
+  assert.deepEqual(page.members.map((member) => member.thread_id), ["crm-delivery:a", "crm-delivery:b"]);
+  const cursor = JSON.parse(page.next_cursor);
+  assert.equal(cursor.scanDone, false);
+  assert.deepEqual(cursor.seen, ["a", "b"]);
 });
 
 test("delivery threads do not match the AI review source", () => {

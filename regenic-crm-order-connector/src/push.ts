@@ -348,7 +348,7 @@ export function startProjectPush(input: {
   });
 }
 
-/** Orders with no conversation yet, and orders already pushed. Each list gets its own concurrency quota. */
+/** 还没写过会话的放前面，已经写过的放后面。两拨共用一个并发上限，不一起跑。 */
 export function splitPushLanes<T extends { id: string }>(
   rows: readonly T[],
   alreadyPushed: ReadonlySet<string>,
@@ -390,32 +390,24 @@ function startLoop(input: {
         const kept = new Set(current);
         const active = heads.filter((row) => !input.skip?.(row));
         const lanes = splitPushLanes(active, pushedIds(input.source));
-        const pushing = Promise.all([
-          runPool(lanes.fresh, input.concurrency, abort.signal, async (row) => {
+        await runPushQueues({
+          fresh: lanes.fresh,
+          recheck: lanes.recheck,
+          gone,
+          concurrency: input.concurrency,
+          signal: abort.signal,
+          run: async (row) => {
             try {
               await input.pushOne(row, abort.signal);
             } catch (error) {
+              if (!current.has(row.id)) {
+                kept.add(row.id);
+              }
               logPush(installationId, row.id, error);
             }
-          }),
-          runPool(lanes.recheck, input.concurrency, abort.signal, async (row) => {
-            try {
-              await input.pushOne(row, abort.signal);
-            } catch (error) {
-              logPush(installationId, row.id, error);
-            }
-          }),
-        ]);
-        await runPool(gone, input.concurrency, abort.signal, async (row) => {
-          try {
-            await input.pushOne(row, abort.signal);
-          } catch (error) {
-            kept.add(row.id);
-            logPush(installationId, row.id, error);
-          }
+          },
         });
         saveSeen(installationId, [...kept]);
-        await pushing;
       } catch (error) {
         logPush(installationId, "", error);
       }
@@ -489,13 +481,38 @@ async function postBatch(
   };
   const accepted = body.accepted_count ?? 0;
   const duplicate = body.duplicate_count ?? 0;
-  const posted = body.last_run_status === "completed"
-    && (body.quarantined_count ?? 0) === 0
-    && accepted + duplicate === records.length;
+  const quarantined = body.quarantined_count ?? 0;
+  const posted = pushBatchAdvances({
+    status: body.last_run_status,
+    accepted,
+    duplicate,
+    quarantined,
+    sent: records.length,
+  });
   if (posted) {
     notePushMessages(installation.id, accepted);
   }
   return posted;
+}
+
+/**
+ * 这一页写完了就往下翻。有记录被隔离时也往下翻，否则同一页会一直重试。
+ * 这次写入没完成，停在这一页，下一轮再试。
+ */
+export function pushBatchAdvances(input: {
+  status: string | undefined;
+  accepted: number;
+  duplicate: number;
+  quarantined: number;
+  sent: number;
+}): boolean {
+  if (input.status !== "completed") {
+    return false;
+  }
+  if (input.quarantined > 0) {
+    return true;
+  }
+  return input.accepted + input.duplicate === input.sent;
 }
 
 function batchFor(
@@ -550,8 +567,23 @@ function headerValue(headers: WebhookRequest["headers"], name: string): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/** 新订单、复查、已离开名单的订单共用一个并发上限，按这个顺序各跑完再跑下一拨。 */
+export async function runPushQueues<T>(input: {
+  fresh: readonly T[];
+  recheck: readonly T[];
+  gone: readonly T[];
+  concurrency: number;
+  signal: AbortSignal;
+  run: (row: T) => Promise<void>;
+}): Promise<void> {
+  const width = Math.max(1, input.concurrency);
+  await runPool(input.fresh, width, input.signal, input.run);
+  await runPool(input.recheck, width, input.signal, input.run);
+  await runPool(input.gone, width, input.signal, input.run);
+}
+
 async function runPool<T>(
-  items: T[],
+  items: readonly T[],
   width: number,
   signal: AbortSignal,
   run: (item: T) => Promise<void>,
