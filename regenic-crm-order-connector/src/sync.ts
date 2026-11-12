@@ -1,5 +1,5 @@
 import type { IngestRecord } from "@regenic/domain";
-import { statusLabel } from "./status";
+import { isEndedStatus, statusLabel } from "./status";
 import { customerScriptFromAsk, customerScriptFromScene } from "./sentences";
 import { stepRecord, type StepDraft } from "./records";
 import { latestMailText } from "./mail-text";
@@ -116,6 +116,12 @@ export async function advanceDelivery(input: {
     return finishClosed(input.orderId, input.order, input.project, cursor, input.now);
   }
   const order = input.order;
+  if (isEndedStatus(order.status) && cursor.ended && cursor.status === order.status) {
+    return { records: [], cursor, hasMore: false, wroteEnd: true };
+  }
+  if (cursor.ended && !isEndedStatus(order.status)) {
+    cursor.ended = false;
+  }
   const label = conversationLabel(order, input.project);
   const records: IngestRecord[] = [];
   if ((cursor.face ?? 0) < 1) {
@@ -139,10 +145,17 @@ export async function advanceDelivery(input: {
     cursor.face = 4;
   }
   let hasMore = false;
+  let wroteEnd = false;
   let guard = 0;
   while (records.length < input.pageSize && guard < 8) {
     guard += 1;
     if (cursor.stage === "live") {
+      if (isEndedStatus(order.status)) {
+        finishEnded(order, input.project, cursor, records, input.now);
+        wroteEnd = true;
+        hasMore = false;
+        break;
+      }
       hasMore = await pullLive(input, cursor, label, records);
       break;
     }
@@ -154,6 +167,10 @@ export async function advanceDelivery(input: {
     if (cursor.stage === "tail") {
       cursor.stage = "live";
       cursor.sawStatusLog = false;
+      if (isEndedStatus(order.status)) {
+        finishEnded(order, input.project, cursor, records, input.now);
+        wroteEnd = true;
+      }
       break;
     }
     cursor.stage = NEXT_STAGE[cursor.stage];
@@ -162,7 +179,7 @@ export async function advanceDelivery(input: {
     records,
     cursor,
     hasMore: hasMore || cursor.stage !== "live",
-    wroteEnd: false,
+    wroteEnd,
   };
 }
 
@@ -346,6 +363,28 @@ function finishClosed(
   cursor.stage = "live";
   cursor.status = status;
   return { records, cursor, hasMore: false, wroteEnd: true };
+}
+
+function finishEnded(
+  order: OrderDoc,
+  project: ProjectDoc | null,
+  cursor: OrderCursor,
+  records: IngestRecord[],
+  now: string,
+): void {
+  const at = order.updatedTime || now;
+  const labelText = statusLabel(order.status);
+  emit(order, conversationLabel(order, project), cursor, records, [{
+    suffix: "end-done",
+    at,
+    kind: "end",
+    actor: "assistant",
+    speaker: "系统",
+    text: `会话状态：done\n交付状态：${labelText}\n这个会话已结束，不再更新。`,
+  }]);
+  cursor.ended = true;
+  cursor.stage = "live";
+  cursor.status = order.status;
 }
 
 function emit(

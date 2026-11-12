@@ -7,8 +7,12 @@ export const UNIT_KIND_LABEL = "交付订单";
 
 export const DEFAULT_REFRESH_MS = 180_000;
 export const DEFAULT_CONCURRENCY = 4;
+/** 目录一页最多交几张订单。内核不限制这一页的张数。 */
+export const MAX_CONCURRENCY = 100;
 export const DEFAULT_RECENT = 30;
 export const PAGE_SIZE = 20;
+/** 一张订单一次写入会话的条数。项目会话仍用 PAGE_SIZE。 */
+export const ORDER_PAGE_SIZE = 100;
 export const RESTART_WAIT_MS = 120_000;
 
 export function streamKey(orderId: string): string {
@@ -37,6 +41,8 @@ export const PROJECT_UNIT_KIND = "crm-project.project";
 export const DEFAULT_PROJECT_REFRESH_MS = 300_000;
 export const DEFAULT_PROJECT_RECENT = 30;
 export const PROJECT_RECENT_MAX = 600;
+/** 目录一次交出的项目个数。选「全部」时不要再按十几个一页翻。 */
+export const PROJECT_DIRECTORY_PAGE = 5_000;
 /** 一个项目里最多列多少张交付中的订单。 */
 export const PROJECT_ORDER_LIMIT = 300;
 

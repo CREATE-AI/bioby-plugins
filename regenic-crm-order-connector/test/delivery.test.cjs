@@ -1,4 +1,8 @@
 const assert = require("node:assert/strict");
+const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = require("node:fs");
+const { DatabaseSync } = require("node:sqlite");
+const { homedir, tmpdir } = require("node:os");
+const { join } = require("node:path");
 const test = require("node:test");
 const { conversationId } = require("@regenic/domain");
 const {
@@ -8,18 +12,109 @@ const {
   pageSelectedHeads,
 } = require("../dist/directory");
 const {
+  connectionFromFormValues,
   crmDeliverySyncDriver,
   deliveryPollHint,
   installConfig,
   rememberDeliveryCursor,
   resetDeliveryCursorMemory,
   selectStoredCursor,
+  setDeliveryCursorDir,
   selectionOf,
 } = require("../dist/driver");
+const { rememberFurtherHistory } = require("../dist/cursor-store");
 const { advanceDelivery, emptyOrderCursor, parseOrderCursor } = require("../dist/sync");
+const { isEndedStatus } = require("../dist/status");
 const { influencerMailScope } = require("../dist/mongo-store");
 const { compactTime } = require("../dist/time");
 const { SOURCE } = require("../dist/locators");
+const { brandIdsOf, pageChoices } = require("../dist/brands");
+const { clearPushArmed, markPushArmed, pushArmed, pushRequestAccepted, pushToken, readPushProgress, resetPushState, splitPushLanes } = require("../dist/push");
+
+test("a typed database address is used before a saved one", () => {
+  assert.deepEqual(connectionFromFormValues({
+    mongo_uri: "mongodb://localhost:27017/crm",
+    mongo_db: "prod",
+  }), { uri: "mongodb://localhost:27017/crm", db: "prod" });
+  assert.equal(connectionFromFormValues({ mongo_uri: "" }), undefined);
+  assert.equal(connectionFromFormValues({ mongo_db: "prod" }), undefined);
+});
+
+test("brand ids keep one copy and paging can search", () => {
+  assert.deepEqual(brandIdsOf({ brand_ids: " a, a, b " }), ["a", "b"]);
+  const page = pageChoices([
+    { value: "1", label: { literal: "阿尔法" } },
+    { value: "2", label: { literal: "贝塔" } },
+  ], "贝", undefined, 50);
+  assert.deepEqual(page.options.map((option) => option.value), ["2"]);
+});
+
+test("push progress counts orders that already have a conversation", () => {
+  const id = `push-progress-test-${process.pid}`;
+  const path = join(homedir(), ".regenic", "crm-push", `${id}.progress.json`);
+  const dir = mkdtempSync(join(tmpdir(), "crm-push-"));
+  const dbPath = join(dir, "regenic.db");
+  const database = new DatabaseSync(dbPath);
+  database.exec("CREATE TABLE thread_heads (thread_id TEXT)");
+  database.prepare("INSERT INTO thread_heads (thread_id) VALUES (?)").run(`${SOURCE}:a`);
+  database.close();
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, JSON.stringify({
+    discoveredIds: ["a", "b", "c"],
+    steadyIds: ["a", "b", "gone"],
+    running: true,
+    messages: 12,
+    updatedAt: "2026-11-12T00:00:00.000Z",
+  }));
+  const previous = process.env.REGENIC_DATABASE;
+  process.env.REGENIC_DATABASE = dbPath;
+  resetPushState();
+  try {
+    const progress = readPushProgress(id, SOURCE);
+    assert.equal(progress.discovered, 3);
+    assert.equal(progress.steady, 1);
+    assert.equal(progress.running, true);
+    assert.equal(progress.messages, 12);
+    assert.equal(crmDeliverySyncDriver.readPushProgress(id).steady, 1);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.REGENIC_DATABASE;
+    } else {
+      process.env.REGENIC_DATABASE = previous;
+    }
+    resetPushState();
+    rmSync(path, { force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("new orders and rechecks use separate lanes", () => {
+  const lanes = splitPushLanes(
+    [{ id: "new" }, { id: "old" }, { id: "another" }],
+    new Set(["old"]),
+  );
+  assert.deepEqual(lanes.fresh.map((row) => row.id), ["new", "another"]);
+  assert.deepEqual(lanes.recheck.map((row) => row.id), ["old"]);
+});
+
+test("sync stays on after the first click until uninstall", () => {
+  const id = `push-armed-test-${process.pid}`;
+  clearPushArmed(id);
+  assert.equal(pushArmed(id), false);
+  markPushArmed(id);
+  assert.equal(pushArmed(id), true);
+  clearPushArmed(id);
+  assert.equal(pushArmed(id), false);
+});
+
+test("push webhook only accepts the token from this process", () => {
+  resetPushState();
+  const token = pushToken("install-1");
+  assert.equal(pushRequestAccepted("install-1", { "x-crm-push-token": token }), true);
+  assert.equal(pushRequestAccepted("install-1", { "x-crm-push-token": "nope" }), false);
+  assert.equal(pushRequestAccepted("install-2", { "x-crm-push-token": token }), false);
+  resetPushState();
+});
 
 test("mail scope keeps untagged influencer mail when the order has no campaign", () => {
   const scope = influencerMailScope(order({ campaignId: "", projectId: "p1", influencerId: "inf", id: "order-a" }));
@@ -50,8 +145,18 @@ test("install rejects a bad Mongo URI and keeps the secret field for the host to
   assert.equal(config.mongo_uri, "mongodb://localhost:27017/crm");
   assert.equal(config.mongo_db, "crm");
   assert.equal(config.sync_concurrency, 2);
+  assert.equal(installConfig({ sync_concurrency: 100 }).sync_concurrency, 100);
+  assert.equal(installConfig({ sync_concurrency: 101 }).sync_concurrency, 100);
   assert.equal(config.selection, "all");
+  assert.deepEqual(config.brand_ids, []);
   assert.equal(selectionOf({}), "all");
+  const branded = installConfig({
+    mongo_uri: "mongodb://localhost:27017/crm",
+    brand_ids: ["b1", "b1", " b2 "],
+    brand_names: "甲,乙",
+  });
+  assert.deepEqual(branded.brand_ids, ["b1", "b2"]);
+  assert.deepEqual(branded.brand_names, ["甲", "乙"]);
   assert.throws(() => installConfig({
     mongo_uri: "mongodb://localhost:27017/crm",
     selection: "pick",
@@ -81,10 +186,12 @@ test("install rejects a bad Mongo URI and keeps the secret field for the host to
     "group.scope",
     "group.scope",
     "group.scope",
+    "group.scope",
     "group.advanced",
     "group.advanced",
   ]);
-  assert.equal(catalog.fields.find((field) => field.key === "mongo_uri").widget, "password");
+  assert.equal(catalog.fields.find((field) => field.key === "mongo_uri").widget, "text");
+  assert.equal(catalog.fields.find((field) => field.key === "mongo_uri").secret, undefined);
   assert.equal(catalog.fields.every((field) => field.type), true);
   const options = await crmDeliverySyncDriver.listCatalogFieldOptions({ env: {} });
   assert.deepEqual(options, { order_ids: [] });
@@ -193,18 +300,56 @@ test("an order that left the delivery view writes one end step and can be marked
   markDeliveryEndWritten("a");
 });
 
-test("an abandoned order still in the delivery view keeps syncing", async () => {
-  const advanced = await advanceDelivery({
+test("an ended order still in the delivery view is marked done and then stays quiet", async () => {
+  for (const status of [
+    "COMPLETED",
+    "SETTLED_COMPLETED",
+    "ABANDONED",
+    "CANCELLED",
+    "CUSTOMER_CANCELLED",
+    "ABNORMAL_HANDLING",
+    "PROJECT_DELAYED_OR_PAUSED",
+    "已完成",
+    "已结清-完结",
+  ]) {
+    assert.equal(isEndedStatus(status), true, status);
+  }
+  assert.equal(isEndedStatus("FOLLOWING"), false);
+  assert.equal(isEndedStatus("CUSTOMER_HOLD"), false);
+
+  const advanced = await advanceUntilSettled(order({ status: "ABANDONED", inDeliveryView: true }));
+  const done = advanced.records.find((record) => String(record.external_id).endsWith(":end-done"));
+  assert.ok(done);
+  assert.match(recordText(done), /会话状态：done/);
+  assert.match(recordText(done), /交付状态：已放弃/);
+  assert.equal(advanced.cursor.ended, true);
+  assert.equal(advanced.wroteEnd, true);
+  assert.equal(advanced.hasMore, false);
+
+  const quiet = await advanceDelivery({
     orderId: "a",
     order: order({ status: "ABANDONED", inDeliveryView: true }),
     project: null,
     store: emptyStore(),
-    cursor: emptyOrderCursor(),
+    cursor: advanced.cursor,
     pageSize: 20,
-    now: "2026-11-06T10:00:00.000Z",
+    now: "2026-11-06T11:00:00.000Z",
   });
-  assert.equal(advanced.wroteEnd, false);
-  assert.equal(advanced.records.some((record) => String(record.external_id).includes(":end-")), false);
+  assert.equal(quiet.records.length, 0);
+  assert.equal(quiet.wroteEnd, true);
+  assert.equal(quiet.hasMore, false);
+
+  const reopened = await advanceDelivery({
+    orderId: "a",
+    order: order({ status: "FOLLOWING", inDeliveryView: true }),
+    project: null,
+    store: emptyStore(),
+    cursor: quiet.cursor,
+    pageSize: 20,
+    now: "2026-11-06T12:00:00.000Z",
+  });
+  assert.equal(reopened.cursor.ended, false);
+  assert.equal(reopened.records.some((record) => String(record.external_id).endsWith(":end-done")), false);
 });
 
 test("status log is kept and a second status step is not added", async () => {
@@ -668,6 +813,7 @@ test("poll hint stays in backfill until the order page is finished", () => {
 
 test("a later live poll keeps the further history cursor", () => {
   resetDeliveryCursorMemory();
+  setDeliveryCursorDir(mkdtempSync(join(tmpdir(), "crm-cursors-")));
   const key = "inst:a";
   const early = JSON.stringify({ ...emptyOrderCursor(), seq: 1, stage: "mails" });
   const later = JSON.stringify({ ...emptyOrderCursor(), seq: 4, stage: "live" });
@@ -675,7 +821,58 @@ test("a later live poll keeps the further history cursor", () => {
   assert.equal(parseOrderCursor(selectStoredCursor(key, early)).seq, 4);
   assert.equal(parseOrderCursor(selectStoredCursor(key, early)).stage, "live");
   assert.equal(parseOrderCursor(selectStoredCursor(key, later)).seq, 4);
+
+  resetDeliveryCursorMemory();
+  assert.equal(parseOrderCursor(selectStoredCursor(key, early)).stage, "live");
+  rememberDeliveryCursor(key, early);
+  assert.equal(parseOrderCursor(selectStoredCursor(key, early)).stage, "live");
 });
+
+test("a finished history cursor is kept when the live cursor is still on mails", () => {
+  resetDeliveryCursorMemory();
+  setDeliveryCursorDir(mkdtempSync(join(tmpdir(), "crm-cursors-")));
+  const early = JSON.stringify({ ...emptyOrderCursor(), seq: 2, stage: "mails" });
+  const later = JSON.stringify({ ...emptyOrderCursor(), seq: 9, stage: "live" });
+  rememberFurtherHistory({
+    installationId: "inst",
+    streamKey: "crm-delivery:order-a",
+    streamPrefix: "crm-delivery:",
+    liveCursor: early,
+    historyCursor: later,
+  });
+  resetDeliveryCursorMemory();
+  assert.equal(parseOrderCursor(selectStoredCursor("inst:order-a", early)).stage, "live");
+
+  rememberFurtherHistory({
+    installationId: "inst",
+    streamKey: "crm-delivery:order-b",
+    streamPrefix: "crm-delivery:",
+    liveCursor: later,
+    historyCursor: early,
+  });
+  assert.equal(selectStoredCursor("inst:order-b", undefined), undefined);
+});
+
+async function advanceUntilSettled(row) {
+  let cursor = emptyOrderCursor();
+  let last = null;
+  for (let i = 0; i < 12; i += 1) {
+    last = await advanceDelivery({
+      orderId: "a",
+      order: row,
+      project: null,
+      store: emptyStore(),
+      cursor,
+      pageSize: 20,
+      now: "2026-11-06T10:00:00.000Z",
+    });
+    cursor = last.cursor;
+    if (last.wroteEnd || last.cursor.ended) {
+      return last;
+    }
+  }
+  return last;
+}
 
 function order(extra = {}) {
   return {

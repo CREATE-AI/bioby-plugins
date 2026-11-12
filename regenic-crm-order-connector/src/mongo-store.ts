@@ -10,7 +10,6 @@ import type {
   PageQuery,
   ProjectDoc,
   ProjectInfoDoc,
-  ProjectLogDoc,
   ProjectOrderRow,
   ProjectStore,
 } from "./model";
@@ -19,41 +18,57 @@ const clients = new Map<string, Promise<MongoClient>>();
 
 export function mongoStore(uri: string, dbName: string): DeliveryStore {
   const db = () => client(uri).then((mongo) => mongo.db(dbName));
+  let brandKey = "";
+  let brandProjectIds: string[] = [];
+  async function scopeFor(database: Db, brandIds: string[] | undefined) {
+    if (!brandIds) {
+      return undefined;
+    }
+    const key = brandIds.join("\u0000");
+    if (key !== brandKey) {
+      brandKey = key;
+      brandProjectIds = brandIds.length === 0 ? [] : await projectIdsOfBrands(database, brandIds);
+    }
+    return { brandIds, projectIds: brandProjectIds };
+  }
   return {
-    async listOpenIds(afterId, limit) {
+    async listOpenIds(afterId, limit, brandIds) {
       const database = await db();
+      const brand = await scopeFor(database, brandIds);
       const rows = await database
         .collection("project_fields")
-        .find(openFilter(afterId ? { _id: { $gt: asId(afterId) } } : {}))
+        .find(openFilter(afterId ? { _id: { $gt: asId(afterId) } } : {}, brand))
         .sort({ _id: 1 })
         .limit(limit)
-        .project({ nickname: 1, projectId: 1, bloggerLink: 1 })
+        .project(ORDER_HEAD_FIELDS)
         .toArray();
       return withProjects(database, rows);
     },
 
-    async listRecentHeads(limit) {
+    async listRecentHeads(limit, brandIds) {
       const database = await db();
+      const brand = await scopeFor(database, brandIds);
       const rows = await database
         .collection("project_fields")
-        .find(openFilter())
+        .find(openFilter({}, brand))
         .sort({ "submitWorkflow.submitTime": -1, createdTime: -1, _id: -1 })
         .limit(limit)
-        .project({ nickname: 1, projectId: 1, bloggerLink: 1 })
+        .project(ORDER_HEAD_FIELDS)
         .toArray();
       return withProjects(database, rows);
     },
 
-    async listHeadsByIds(ids) {
+    async listHeadsByIds(ids, brandIds) {
       const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
       if (unique.length === 0) {
         return [];
       }
       const database = await db();
+      const brand = await scopeFor(database, brandIds);
       const rows = await database
         .collection("project_fields")
-        .find(openFilter({ _id: { $in: unique.map(asId) } }))
-        .project({ nickname: 1, projectId: 1, bloggerLink: 1 })
+        .find(openFilter({ _id: { $in: unique.map(asId) } }, brand))
+        .project(ORDER_HEAD_FIELDS)
         .toArray();
       const heads = await withProjects(database, rows);
       const byId = new Map(heads.map((row) => [row.id, row]));
@@ -119,10 +134,14 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
 export function projectStore(uri: string, dbName: string): ProjectStore {
   const db = () => client(uri).then((mongo) => mongo.db(dbName));
   return {
-    async listProjects(limit) {
+    async listProjects(limit, brandIds) {
+      const filter: Record<string, unknown> = { isDeleted: false };
+      if (brandIds) {
+        filter.brandId = { $in: brandIds };
+      }
       let query = (await db())
         .collection("projects")
-        .find(loose({ isDeleted: { $ne: true } }))
+        .find(loose(filter))
         .sort({ createdTime: -1, _id: -1 })
         .project({ name: 1 });
       if (limit != null) {
@@ -139,7 +158,7 @@ export function projectStore(uri: string, dbName: string): ProjectStore {
       }
       const alive = await (await db())
         .collection("projects")
-        .find(loose({ _id: { $in: unique.map(asId) }, isDeleted: { $ne: true } }))
+        .find(loose({ _id: { $in: unique.map(asId) }, isDeleted: false }))
         .project({ _id: 1 })
         .toArray();
       const kept = new Set(alive.map((row) => idOf(row._id)));
@@ -149,19 +168,6 @@ export function projectStore(uri: string, dbName: string): ProjectStore {
     async readProjectInfo(id) {
       const row = await (await db()).collection("projects").findOne(loose({ _id: asId(id) }));
       return row ? mapProjectInfo(row) : null;
-    },
-
-    async listProjectLogs(projectId, afterId, limit) {
-      const rows = await (await db())
-        .collection("project_operation_logs")
-        .find(loose({
-          projectId,
-          ...(afterId ? { _id: { $gt: asId(afterId) } } : {}),
-        }))
-        .sort({ _id: 1 })
-        .limit(limit)
-        .toArray();
-      return pageOf(rows.map(mapProjectLog), limit);
     },
 
     async listProjectOrders(projectId, limit) {
@@ -189,6 +195,13 @@ export function projectStore(uri: string, dbName: string): ProjectStore {
     },
   };
 }
+
+const ORDER_HEAD_FIELDS = {
+  nickname: 1,
+  projectId: 1,
+  bloggerLink: 1,
+  "selectedWorkflow.status": 1,
+};
 
 const ORDER_ROW_FIELDS = {
   nickname: 1,
@@ -223,7 +236,7 @@ function mapProjectInfo(row: Document): ProjectInfoDoc {
     ...mapProject(row),
     status: stringOf(row.status),
     level: stringOf(row.level),
-    isDeleted: row.isDeleted === true,
+    isDeleted: row.isDeleted !== false,
     description: stringOf(row.description),
     descriptionExtra: stringOf(row.descriptionExtra),
     quoteMethod: stringOf(row.quoteMethod),
@@ -244,17 +257,6 @@ function mapProjectInfo(row: Document): ProjectInfoDoc {
     deadline: iso(row.deadline),
     createdTime: iso(row.createdTime),
     updatedTime: iso(row.updatedTime),
-  };
-}
-
-function mapProjectLog(row: Document): ProjectLogDoc {
-  return {
-    id: idOf(row._id),
-    operationType: stringOf(row.operationType),
-    message: stringOf(row.message),
-    actorType: stringOf(row.actorType),
-    createdAt: iso(row.createdAt),
-    metadata: asRecord(row.metadata) ?? {},
   };
 }
 
@@ -361,8 +363,8 @@ async function client(uri: string): Promise<MongoClient> {
 
 const CHOOSER_LIMIT = 5000;
 
-export async function listChooserHeads(store: DeliveryStore): Promise<OpenOrderHead[]> {
-  return store.listRecentHeads(CHOOSER_LIMIT);
+export async function listChooserHeads(store: DeliveryStore, brandIds?: string[]): Promise<OpenOrderHead[]> {
+  return store.listRecentHeads(CHOOSER_LIMIT, brandIds);
 }
 
 async function withProjects(database: Db, rows: Document[]): Promise<OpenOrderHead[]> {
@@ -388,14 +390,67 @@ async function withProjects(database: Db, rows: Document[]): Promise<OpenOrderHe
     nickname: stringOf(row.nickname),
     projectName: names.get(stringOf(row.projectId) ?? ""),
     bloggerLink: stringOf(row.bloggerLink),
+    status: stringOf(asRecord(row.selectedWorkflow)?.status),
   }));
 }
 
-function openFilter(extra: Record<string, unknown> = {}): Filter<Document> {
-  return loose({
+function openFilter(
+  extra: Record<string, unknown> = {},
+  brand?: { brandIds: string[]; projectIds: string[] },
+): Filter<Document> {
+  const base = {
     isDeleted: { $ne: true },
     "viewFlags.inDeliveryView": true,
     ...extra,
+  };
+  if (!brand) {
+    return loose(base);
+  }
+  return { $and: [loose(base), loose(orderBrandClause(brand.brandIds, brand.projectIds))] };
+}
+
+function orderBrandClause(brandIds: string[], projectIds: string[]): Record<string, unknown> {
+  const or: Record<string, unknown>[] = [];
+  if (brandIds.length > 0) {
+    or.push({ brandId: { $in: brandIds } });
+  }
+  if (projectIds.length > 0) {
+    or.push({ projectId: { $in: projectIds } });
+  }
+  if (or.length === 0) {
+    return { _id: { $in: [] } };
+  }
+  if (or.length === 1) {
+    return or[0]!;
+  }
+  return { $or: or };
+}
+
+async function projectIdsOfBrands(database: Db, brandIds: string[]): Promise<string[]> {
+  const rows = await database
+    .collection("projects")
+    .find(loose({ isDeleted: false, brandId: { $in: brandIds } }))
+    .project({ _id: 1 })
+    .toArray();
+  return rows.map((row) => idOf(row._id));
+}
+
+export async function listBrandChoices(
+  uri: string,
+  dbName: string,
+): Promise<Array<{ value: string; label: { literal: string } }>> {
+  const database = (await client(uri)).db(dbName);
+  const rows = await database
+    .collection("brands")
+    .find(loose({ isDeleted: { $ne: true } }))
+    .project({ brandName: 1 })
+    .sort({ brandName: 1, _id: 1 })
+    .limit(2_000)
+    .toArray();
+  return rows.map((row) => {
+    const id = idOf(row._id);
+    const name = stringOf(row.brandName) || id;
+    return { value: id, label: { literal: name } };
   });
 }
 

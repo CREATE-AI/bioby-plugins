@@ -5,18 +5,19 @@ import {
   PROJECT_UNIT_KIND,
   threadId as orderThreadId,
 } from "./locators";
-import type { ProjectInfoDoc, ProjectLogDoc, ProjectOrderRow, ProjectStore } from "./model";
+import type { ProjectInfoDoc, ProjectOrderRow, ProjectStore } from "./model";
 import { stepRecord, type StepDraft } from "./records";
 import { statusLabel } from "./status";
 import { compactTime, shortHash, stepToken, withOffsets } from "./time";
 
 export interface ProjectCursor {
   v: 1;
-  stage: "logs" | "orders" | "live";
+  stage: "orders" | "live";
   fp: Record<string, string>;
   infoFp?: string;
   status?: string;
-  logAfter: string | null;
+  /** 旧游标里的日志位置。项目日志不再同步，只为读旧游标留着。 */
+  logAfter?: string | null;
   /** 已经写进项目会话、且仍在交付视图里的订单。 */
   orders: string[];
   orderSkip: number;
@@ -25,7 +26,7 @@ export interface ProjectCursor {
 }
 
 export function emptyProjectCursor(): ProjectCursor {
-  return { v: 1, stage: "logs", fp: {}, logAfter: null, orders: [], orderSkip: 0 };
+  return { v: 1, stage: "orders", fp: {}, orders: [], orderSkip: 0 };
 }
 
 export function parseProjectCursor(raw: string | null | undefined): ProjectCursor {
@@ -41,6 +42,7 @@ export function parseProjectCursor(raw: string | null | undefined): ProjectCurso
       ...emptyProjectCursor(),
       ...parsed,
       v: 1,
+      stage: parsed.stage === "live" ? "live" : "orders",
       fp: parsed.fp,
       orders: Array.isArray(parsed.orders) ? parsed.orders.filter((id) => typeof id === "string") : [],
       orderSkip: typeof parsed.orderSkip === "number" ? parsed.orderSkip : 0,
@@ -66,17 +68,11 @@ export async function advanceProject(input: {
   const project = input.project;
   const label = projectLabel(project);
   const records: IngestRecord[] = [];
+  if (retireProjectLogs(project.id, label, cursor, records, input.pageSize, input.now)) {
+    return { records, cursor, hasMore: true, wroteEnd: false };
+  }
   emit(project.id, label, cursor, records, infoSteps(project, cursor, input.now));
   emit(project.id, label, cursor, records, [inboxStep(input.now)]);
-
-  if (cursor.stage === "logs") {
-    const more = await pullLogs(input, cursor, label, records, input.pageSize);
-    if (more) {
-      return { records, cursor, hasMore: true, wroteEnd: false };
-    }
-    cursor.stage = "orders";
-    cursor.orderSkip = 0;
-  }
 
   if (cursor.stage === "orders") {
     const open = await input.store.listProjectOrders(project.id, PROJECT_ORDER_LIMIT);
@@ -93,34 +89,36 @@ export async function advanceProject(input: {
     return { records, cursor, hasMore: false, wroteEnd: false };
   }
 
-  const logsMore = await pullLogs(input, cursor, label, records, input.pageSize);
   await syncOrders(input.store, project, cursor, label, records);
-  return { records, cursor, hasMore: logsMore, wroteEnd: false };
+  return { records, cursor, hasMore: false, wroteEnd: false };
 }
 
-async function pullLogs(
-  input: Parameters<typeof advanceProject>[0],
-  cursor: ProjectCursor,
+/** 已经写进会话的项目日志，按页从会话里拿掉。不再读新的项目日志。 */
+function retireProjectLogs(
+  projectId: string,
   label: string,
+  cursor: ProjectCursor,
   records: IngestRecord[],
-  budget: number,
-): Promise<boolean> {
-  const page = await input.store.listProjectLogs(input.projectId, cursor.logAfter, Math.max(1, budget));
-  const orderIds = page.items.map((log) => stringOf(log.metadata.projectFieldId)).filter(Boolean);
-  const nicknames = new Map<string, string>();
-  if (orderIds.length > 0) {
-    for (const row of await input.store.readOrderRows(orderIds)) {
-      if (row.nickname) {
-        nicknames.set(row.id, row.nickname);
-      }
-    }
+  pageSize: number,
+  now: string,
+): boolean {
+  const pending = Object.keys(cursor.fp)
+    .filter((suffix) => suffix.startsWith("log-"))
+    .sort();
+  if (pending.length === 0) {
+    return false;
   }
-  emit(input.projectId, label, cursor, records, page.items.map((log) => logStep(log, nicknames)));
-  const last = page.items[page.items.length - 1];
-  if (last) {
-    cursor.logAfter = last.id;
-  }
-  return page.full;
+  const steps: StepDraft[] = pending.slice(0, Math.max(pageSize, 200)).map((suffix) => ({
+    suffix,
+    at: now,
+    kind: "log",
+    actor: "assistant",
+    speaker: "项目动态",
+    text: "",
+    tombstone: true,
+  }));
+  emit(projectId, label, cursor, records, steps);
+  return Object.keys(cursor.fp).some((suffix) => suffix.startsWith("log-"));
 }
 
 async function syncOrders(
@@ -308,91 +306,6 @@ export function orderLine(row: ProjectOrderRow): string {
   return lines.join("\n");
 }
 
-const LOG_TYPES: Record<string, string> = {
-  PROJECT_CREATED: "项目创建",
-  MATCHING_LAUNCHED: "开始匹配达人",
-  CAMPAIGN_CREATED: "新建活动",
-  CAMPAIGN_SEARCH_STARTED: "开始搜索达人",
-  FILTER_TASK_STARTED: "开始筛选达人",
-  LEAD_MATCH_REVIEWED: "客户看了匹配的达人",
-  LEAD_SUBMIT_REVIEW: "达人提交给客户审核",
-  ONE_CLICK_SUBMIT: "一键提报",
-  PROJECT_RESUBMIT: "重新提报",
-  ORDER_CUSTOMER_REVIEW_SUBMIT: "客户审核提报的达人",
-  ORDER_CUSTOMER_REVIEW_DELIVERY: "客户审核交付内容",
-  PROJECT_DELETED: "项目删除",
-};
-
-const ACTORS: Record<string, string> = {
-  USER: "用户",
-  BRAND: "品牌",
-  SYSTEM: "系统",
-};
-
-const REVIEW_RESULTS: Record<string, string> = {
-  APPROVED: "通过",
-  REJECTED: "驳回",
-  HOLD: "暂缓",
-};
-
-const REVIEW_TYPES: Record<string, string> = {
-  IDEA: "想法",
-  SCRIPT: "脚本",
-  VIDEO: "视频草稿",
-  DRAFT: "草稿",
-};
-
-function logStep(log: ProjectLogDoc, nicknames: Map<string, string>): StepDraft {
-  const type = log.operationType ?? "";
-  const meta = log.metadata;
-  const lines = [LOG_TYPES[type] ?? (type || "项目动态")];
-  if (type === "LEAD_MATCH_REVIEWED" && typeof meta.isMatch === "boolean") {
-    lines.push(`结果：${meta.isMatch ? "合适" : "不合适"}`);
-  }
-  const result = stringOf(meta.reviewResult).toUpperCase();
-  if (result) {
-    lines.push(`结果：${REVIEW_RESULTS[result] ?? result}`);
-  }
-  const reviewType = stringOf(meta.reviewType).toUpperCase();
-  if (reviewType) {
-    lines.push(`审核内容：${REVIEW_TYPES[reviewType] ?? reviewType}`);
-  }
-  const comment = stringOf(meta.reviewComment);
-  if (comment) {
-    lines.push(`意见：${comment}`);
-  }
-  if (typeof meta.submittedCount === "number") {
-    lines.push(`提报人数：${meta.submittedCount}`);
-  }
-  if (typeof meta.fieldCount === "number") {
-    lines.push(`重新提报人数：${meta.fieldCount}`);
-  }
-  const message = log.message?.trim() ?? "";
-  if (/[\u4e00-\u9fff]/.test(message) && !lines.includes(message)) {
-    lines.push(message);
-  }
-  const orderId = stringOf(meta.projectFieldId);
-  if (orderId) {
-    const nick = nicknames.get(orderId);
-    if (nick) {
-      lines.push(`达人：${nick}`);
-    }
-    lines.push(`订单会话：${orderThreadId(orderId)}`);
-  }
-  const actor = log.actorType ? ACTORS[log.actorType.toUpperCase()] ?? log.actorType : "";
-  if (actor) {
-    lines.push(`操作方：${actor}`);
-  }
-  return {
-    suffix: `log-${stepToken(log.id)}`,
-    at: log.createdAt || new Date(0).toISOString(),
-    kind: "log",
-    actor: "assistant",
-    speaker: "项目动态",
-    text: lines.join("\n"),
-  };
-}
-
 function emit(
   projectId: string,
   label: string,
@@ -401,9 +314,14 @@ function emit(
   steps: StepDraft[],
 ): IngestRecord[] {
   for (const step of withOffsets(steps)) {
-    const hash = shortHash(`${step.actor}\n${step.speaker}\n${step.text}`);
+    const hash = shortHash(
+      step.tombstone ? `tombstone:${step.suffix}` : `${step.actor}\n${step.speaker}\n${step.text}`,
+    );
     const previous = cursor.fp[step.suffix];
-    if (previous === hash) {
+    if (!step.tombstone && previous === hash) {
+      continue;
+    }
+    if (step.tombstone && !previous) {
       continue;
     }
     records.push(stepRecord({
@@ -411,11 +329,15 @@ function emit(
       label,
       step,
       occurredAt: step.occurredAt,
-      operation: previous ? "revise" : "create",
+      operation: step.tombstone ? "tombstone" : previous ? "revise" : "create",
       source: PROJECT_SOURCE,
       unitKind: PROJECT_UNIT_KIND,
     }));
-    cursor.fp[step.suffix] = hash;
+    if (step.tombstone) {
+      delete cursor.fp[step.suffix];
+    } else {
+      cursor.fp[step.suffix] = hash;
+    }
   }
   return records;
 }
@@ -445,8 +367,4 @@ function joined(values: string[] | undefined): string {
 
 function dateOnly(value: string | undefined): string {
   return value ? value.slice(0, 10) : "";
-}
-
-function stringOf(value: unknown): string {
-  return typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
 }

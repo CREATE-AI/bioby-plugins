@@ -13,6 +13,12 @@ import {
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
+  deliveryCursorKey,
+  rememberDeliveryCursor,
+  rememberFurtherHistory,
+  selectStoredCursor,
+} from "./cursor-store";
+import {
   listDirectoryPage,
   markDeliveryEndWritten,
   pageSelectedHeads,
@@ -21,21 +27,25 @@ import { deliveryLocaleTables } from "./locales";
 import {
   CONNECTOR_TYPE,
   DEFAULT_CONCURRENCY,
+  MAX_CONCURRENCY,
   DEFAULT_RECENT,
   DEFAULT_REFRESH_MS,
-  PAGE_SIZE,
+  ORDER_PAGE_SIZE,
   SOURCE,
   streamKey,
   subjectCatalog as deliverySubjectCatalog,
   threadId,
 } from "./locators";
-import { listChooserHeads, mongoStore } from "./mongo-store";
-import type { OpenOrderHead } from "./model";
+import { brandIdsOf, pageChoices } from "./brands";
+import { listBrandChoices, listChooserHeads, mongoStore } from "./mongo-store";
+import { bindPushWebhook, clearPushArmed, kickPush, markPushArmed, pushArmed, readPushProgress, startDeliveryPush, stopPush } from "./push";
+import type { DeliveryStore, OpenOrderHead } from "./model";
 import { advanceDelivery, parseOrderCursor } from "./sync";
 
 export const crmDeliverySyncDriver: ChannelDriver = {
   connector_type: CONNECTOR_TYPE,
   source: SOURCE,
+  source_mode: "webhook",
 
   install(input) {
     return {
@@ -62,6 +72,40 @@ export const crmDeliverySyncDriver: ChannelDriver = {
     return this.matchesThread(installation, thread);
   },
 
+  async startInstallation(installation, host) {
+    markPushArmed(installation.id);
+    startDeliveryPush({
+      installation,
+      intervalMs: refreshOf(installation),
+      concurrency: concurrencyOf(installation),
+      pageSize: ORDER_PAGE_SIZE,
+      listHeads: async () => {
+        if (brandIdsOf(installation.config).length === 0) {
+          return [];
+        }
+        return listScopedOrderHeads(await openStore(installation, host), installation.config);
+      },
+      readOrder: async (orderId) => {
+        const store = await openStore(installation, host);
+        const order = await store.readOrder(orderId);
+        const project = order?.projectId ? await store.readProject(order.projectId) : null;
+        return { order, project, store };
+      },
+    });
+  },
+
+  async stopInstallation(installation, _host, context) {
+    stopPush(installation.id);
+    if (context?.reason === "delete") {
+      clearPushArmed(installation.id);
+    }
+  },
+
+  bindWebhook(installation) {
+    kickPush(installation.id);
+    return Promise.resolve(bindPushWebhook(installation, SOURCE));
+  },
+
   capabilities(installation) {
     if (installation.status !== "enabled") {
       return { sync: false, reply: false, create: false };
@@ -86,24 +130,25 @@ export const crmDeliverySyncDriver: ChannelDriver = {
         try {
           const store = await openStore(installation, host);
           const mode = selectionOf(installation.config);
-          const key = mode === "pick"
-            ? `pick:${orderIdsOf(installation.config).join(",")}`
+          const brands = brandIdsOf(installation.config);
+          const key = `${mode}:${brands.join(",")}:${mode === "pick"
+            ? orderIdsOf(installation.config).join(",")
             : mode === "recent"
-              ? `recent:${recentOf(installation.config)}`
-              : "all";
+              ? String(recentOf(installation.config))
+              : "all"}`;
           return await listDirectoryPage({
             cursor,
             concurrency: concurrencyOf(installation),
             now: Date.now(),
             listOpenIds: async (afterId, limit) => {
               if (mode === "all") {
-                return store.listOpenIds(afterId, limit);
+                return store.listOpenIds(afterId, limit, brands);
               }
               if (!selected || selectedKey !== key || !afterId) {
                 selectedKey = key;
                 selected = mode === "pick"
-                  ? await store.listHeadsByIds(orderIdsOf(installation.config))
-                  : await store.listRecentHeads(recentOf(installation.config));
+                  ? await store.listHeadsByIds(orderIdsOf(installation.config), brands)
+                  : await store.listRecentHeads(recentOf(installation.config), brands);
               }
               return pageSelectedHeads(selected, afterId, limit);
             },
@@ -131,7 +176,8 @@ export const crmDeliverySyncDriver: ChannelDriver = {
             const order = await store.readOrder(orderId);
             const project = order?.projectId ? await store.readProject(order.projectId) : null;
             const now = new Date().toISOString();
-            const cursorKey = `${installation.id}:${orderId}`;
+            const cursorKey = deliveryCursorKey(installation.id, orderId);
+            hydrateDeliveryCursors(installation.id);
             const selected = selectStoredCursor(cursorKey, cursor?.value);
             const advanced = await advanceDelivery({
               orderId,
@@ -139,7 +185,7 @@ export const crmDeliverySyncDriver: ChannelDriver = {
               project,
               store,
               cursor: parseOrderCursor(selected),
-              pageSize: PAGE_SIZE,
+              pageSize: ORDER_PAGE_SIZE,
               now,
             });
             if (advanced.wroteEnd) {
@@ -183,12 +229,11 @@ export const crmDeliverySyncDriver: ChannelDriver = {
         {
           key: "mongo_uri",
           type: "string" as const,
-          widget: "password" as const,
+          widget: "text" as const,
           label: "field.mongoUri",
           description: "field.mongoUri.description",
           group: "group.connection",
-          required: true,
-          secret: true,
+          required: false,
           placeholder: "field.mongoUri.placeholder",
         },
         {
@@ -200,6 +245,20 @@ export const crmDeliverySyncDriver: ChannelDriver = {
           group: "group.connection",
           required: false,
           placeholder: "field.mongoDb.placeholder",
+        },
+        {
+          key: "brand_ids",
+          type: "string_array" as const,
+          widget: "multi_select" as const,
+          label: "field.brands",
+          description: "field.brands.description",
+          group: "group.scope",
+          required: false,
+          multiple: true,
+          dynamic_options: true,
+          options_depends_on: ["mongo_uri", "mongo_db"],
+          option_labels_key: "brand_names",
+          placeholder: "field.brands.placeholder",
         },
         {
           key: "selection",
@@ -226,6 +285,7 @@ export const crmDeliverySyncDriver: ChannelDriver = {
           required: true,
           multiple: true,
           dynamic_options: true,
+          options_depends_on: ["mongo_uri", "mongo_db", "brand_ids"],
           placeholder: "field.orderIds.placeholder",
           option_labels_key: "order_names",
           visible_when: { field: "selection", value: "pick" },
@@ -267,7 +327,7 @@ export const crmDeliverySyncDriver: ChannelDriver = {
           required: false,
           default: DEFAULT_CONCURRENCY,
           min: 1,
-          max: 20,
+          max: MAX_CONCURRENCY,
         },
       ],
       install_confirm: {
@@ -278,15 +338,26 @@ export const crmDeliverySyncDriver: ChannelDriver = {
     };
   },
 
-  async listCatalogFieldOptions({ env }) {
-    const saved = await readSavedDeliveryConnection(env);
+  async listCatalogFieldOptions() {
+    return { order_ids: [] };
+  },
+
+  async listCatalogFieldOptionsPage({ env, field, query, cursor, limit, values }) {
+    const saved = connectionFromFormValues(values) ?? await readSavedMongo(env, [CONNECTOR_TYPE, "crm-project-sync"]);
     if (!saved) {
-      return { order_ids: [] };
+      return { options: [] };
     }
     try {
-      return { order_ids: await cachedOrderOptions(saved) };
+      if (field === "brand_ids") {
+        return pageChoices(await cachedBrandOptions(saved), query, cursor, limit);
+      }
+      if (field === "order_ids") {
+        const brands = brandIdsOf({ brand_ids: values?.brand_ids });
+        return pageChoices(await cachedOrderOptions(saved, brands), query, cursor, limit);
+      }
+      return { options: [] };
     } catch {
-      throw new ChannelDriverError("sync_failed", "读取订单列表失败");
+      throw new ChannelDriverError("sync_failed", "读取选项失败");
     }
   },
 
@@ -307,6 +378,11 @@ export const crmDeliverySyncDriver: ChannelDriver = {
   },
 };
 
+Object.assign(crmDeliverySyncDriver, {
+  readPushProgress: (installationId: string) => readPushProgress(installationId, SOURCE),
+  pushArmed,
+});
+
 export function installConfig(config: Record<string, unknown>): Record<string, JsonValue> {
   const uri = stringOf(config.mongo_uri);
   if (uri && !/^mongodb(\+srv)?:\/\//.test(uri)) {
@@ -314,13 +390,19 @@ export function installConfig(config: Record<string, unknown>): Record<string, J
   }
   const db = stringOf(config.mongo_db) || (uri ? databaseFromUri(uri) : "");
   const selection = selectionOf(config);
+  const brandIds = brandIdsOf(config);
   const stored: Record<string, JsonValue> = {
     ...(uri ? { mongo_uri: uri } : {}),
     ...(db ? { mongo_db: db } : {}),
     refresh_interval_ms: boundedInt(config.refresh_interval_ms, DEFAULT_REFRESH_MS, 5_000, 3_600_000),
-    sync_concurrency: boundedInt(config.sync_concurrency, DEFAULT_CONCURRENCY, 1, 20),
+    sync_concurrency: boundedInt(config.sync_concurrency, DEFAULT_CONCURRENCY, 1, MAX_CONCURRENCY),
     selection,
+    brand_ids: brandIds,
   };
+  const brandNames = csvList(config.brand_names);
+  if (brandNames.length > 0 && brandNames.length === brandIds.length) {
+    stored.brand_names = brandNames;
+  }
   if (selection === "recent") {
     stored.recent_limit = recentOf(config);
   }
@@ -336,6 +418,36 @@ export function installConfig(config: Record<string, unknown>): Record<string, J
     }
   }
   return stored;
+}
+
+async function listScopedOrderHeads(
+  store: DeliveryStore,
+  config: Record<string, unknown>,
+): Promise<OpenOrderHead[]> {
+  const brands = brandIdsOf(config);
+  if (brands.length === 0) {
+    return [];
+  }
+  const mode = selectionOf(config);
+  if (mode === "pick") {
+    return store.listHeadsByIds(orderIdsOf(config), brands);
+  }
+  if (mode === "recent") {
+    return store.listRecentHeads(recentOf(config), brands);
+  }
+  const all: OpenOrderHead[] = [];
+  let after: string | null = null;
+  for (;;) {
+    const page = await store.listOpenIds(after, 500, brands);
+    all.push(...page);
+    if (page.length < 500) {
+      return all;
+    }
+    after = page[page.length - 1]?.id ?? null;
+    if (!after) {
+      return all;
+    }
+  }
 }
 
 async function openStore(installation: ConnectorInstallation, host: ConnectorHost) {
@@ -374,7 +486,7 @@ async function readUri(
     cached.uri.catch(() => uriCache.delete(key));
   }
   const stored = await cached.uri;
-  const uri = stored?.trim() || stringOf(installation.config.mongo_uri);
+  const uri = stringOf(installation.config.mongo_uri) || stored?.trim();
   if (!uri) {
     uriCache.delete(key);
     throw new ChannelDriverError("missing_credentials", "没有 MongoDB 连接串");
@@ -418,35 +530,54 @@ export function deliveryPollHint(hasMore: boolean): { live_seeded: boolean; hist
   };
 }
 
-const cursorAhead = new Map<string, { seq: number; raw: string }>();
+export {
+  rememberDeliveryCursor,
+  resetDeliveryCursorMemory,
+  selectStoredCursor,
+  setDeliveryCursorDir,
+} from "./cursor-store";
 
-export function resetDeliveryCursorMemory(): void {
-  cursorAhead.clear();
-}
+const hydratedCursorInstalls = new Set<string>();
 
-/** 历史页只推进 history 游标，live 游标会停在更早的一页。取序号更大的那份。 */
-export function selectStoredCursor(key: string, raw: string | undefined): string | undefined {
-  const remembered = cursorAhead.get(key);
-  if (!remembered) {
-    return raw;
+/** 把库里已经拉完、但复查进度还停在半路的订单补进本机记录。一个进程只做一次。 */
+export function hydrateDeliveryCursors(installationId: string, env: NodeJS.ProcessEnv = process.env): void {
+  if (hydratedCursorInstalls.has(installationId)) {
+    return;
   }
-  if (remembered.seq > cursorSeq(raw)) {
-    return remembered.raw;
+  hydratedCursorInstalls.add(installationId);
+  const path = env.REGENIC_DATABASE?.trim();
+  if (!path) {
+    return;
   }
-  return raw;
-}
-
-export function rememberDeliveryCursor(key: string, raw: string): void {
-  const seq = cursorSeq(raw);
-  const remembered = cursorAhead.get(key);
-  if (!remembered || seq >= remembered.seq) {
-    cursorAhead.set(key, { seq, raw });
+  let database: DatabaseSync | undefined;
+  try {
+    database = new DatabaseSync(path, { readOnly: true, timeout: 1_000, enableForeignKeyConstraints: false });
+    const rows = database.prepare(
+      `SELECT stream_key, live_cursor, history_cursor
+       FROM connector_sync_state
+       WHERE installation_id = ? AND history_cursor IS NOT NULL`,
+    ).all(installationId) as Array<{
+      stream_key?: string;
+      live_cursor?: string | null;
+      history_cursor?: string | null;
+    }>;
+    for (const row of rows) {
+      if (typeof row.stream_key !== "string") {
+        continue;
+      }
+      rememberFurtherHistory({
+        installationId,
+        streamKey: row.stream_key,
+        streamPrefix: `${SOURCE}:`,
+        liveCursor: row.live_cursor,
+        historyCursor: row.history_cursor,
+      });
+    }
+  } catch {
+    // 读不到旧进度就用内核交来的游标。
+  } finally {
+    database?.close();
   }
-}
-
-function cursorSeq(raw: string | undefined): number {
-  const seq = parseOrderCursor(raw).seq;
-  return typeof seq === "number" && Number.isFinite(seq) ? seq : 0;
 }
 
 function deliveryId(
@@ -477,7 +608,7 @@ function refreshOf(installation: ConnectorInstallation): number {
 }
 
 function concurrencyOf(installation: ConnectorInstallation): number {
-  return boundedInt(installation.config.sync_concurrency, DEFAULT_CONCURRENCY, 1, 20);
+  return boundedInt(installation.config.sync_concurrency, DEFAULT_CONCURRENCY, 1, MAX_CONCURRENCY);
 }
 
 export function selectionOf(config: Record<string, unknown>): "all" | "recent" | "pick" {
@@ -504,14 +635,33 @@ function csvList(value: unknown): string[] {
 }
 
 const ORDER_OPTION_CACHE_MS = 15_000;
+let brandOptionCache: {
+  key: string;
+  at: number;
+  options: Array<{ value: string; label: { literal: string } }>;
+} | undefined;
 let orderOptionCache: {
   key: string;
   at: number;
   options: Array<{ value: string; label: { literal: string }; title: string }>;
 } | undefined;
 
-async function readSavedDeliveryConnection(
+export async function readSavedMongo(
   env: NodeJS.ProcessEnv,
+  connectorTypes: string[],
+): Promise<{ uri: string; db: string } | undefined> {
+  for (const connectorType of connectorTypes) {
+    const saved = await readSavedInstallation(env, connectorType);
+    if (saved) {
+      return saved;
+    }
+  }
+  return undefined;
+}
+
+async function readSavedInstallation(
+  env: NodeJS.ProcessEnv,
+  connectorType: string,
 ): Promise<{ uri: string; db: string } | undefined> {
   const path = env.REGENIC_DATABASE?.trim();
   if (!path) {
@@ -529,7 +679,7 @@ async function readSavedDeliveryConnection(
        WHERE connector_type = ?
        ORDER BY updated_at DESC
        LIMIT 1`,
-    ).get(CONNECTOR_TYPE);
+    ).get(connectorType);
     if (!row || typeof row !== "object") {
       return undefined;
     }
@@ -539,8 +689,8 @@ async function readSavedDeliveryConnection(
       return undefined;
     }
     const config = parseStoredConfig(rawConfig);
-    const stored = await readInstallSecret(CONNECTOR_TYPE, id, "mongo_uri");
-    const uri = stored?.trim() || stringOf(config.mongo_uri);
+    const stored = await readInstallSecret(connectorType, id, "mongo_uri");
+    const uri = stringOf(config.mongo_uri) || stored?.trim() || "";
     const db = stringOf(config.mongo_db) || databaseFromUri(uri);
     if (!uri || !db) {
       return undefined;
@@ -567,17 +717,31 @@ function parseStoredConfig(raw: string): Record<string, unknown> {
   }
 }
 
-async function cachedOrderOptions(saved: { uri: string; db: string }): Promise<Array<{
+async function cachedBrandOptions(saved: { uri: string; db: string }): Promise<Array<{
+  value: string;
+  label: { literal: string };
+}>> {
+  const key = createHash("sha256").update(`brand\u0000${saved.db}\u0000${saved.uri}`).digest("hex");
+  const now = Date.now();
+  if (brandOptionCache && brandOptionCache.key === key && now - brandOptionCache.at < ORDER_OPTION_CACHE_MS) {
+    return brandOptionCache.options;
+  }
+  const options = await listBrandChoices(saved.uri, saved.db);
+  brandOptionCache = { key, at: now, options };
+  return options;
+}
+
+async function cachedOrderOptions(saved: { uri: string; db: string }, brandIds: string[]): Promise<Array<{
   value: string;
   label: { literal: string };
   title: string;
 }>> {
-  const key = createHash("sha256").update(`${saved.db}\u0000${saved.uri}`).digest("hex");
+  const key = createHash("sha256").update(`${saved.db}\u0000${saved.uri}\u0000${brandIds.join(",")}`).digest("hex");
   const now = Date.now();
   if (orderOptionCache && orderOptionCache.key === key && now - orderOptionCache.at < ORDER_OPTION_CACHE_MS) {
     return orderOptionCache.options;
   }
-  const heads = await listChooserHeads(mongoStore(saved.uri, saved.db));
+  const heads = brandIds.length === 0 ? [] : await listChooserHeads(mongoStore(saved.uri, saved.db), brandIds);
   const options = heads.map((row) => ({
     value: row.id,
     label: { literal: chooserLabel(row) },
@@ -609,6 +773,22 @@ export function boundedInt(value: unknown, fallback: number, min: number, max: n
     return fallback;
   }
   return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+/** 安装页上刚填的地址优先。密码框空着时，再用已经保存的连接。 */
+export function connectionFromFormValues(
+  values: Record<string, unknown> | undefined,
+): { uri: string; db: string } | undefined {
+  const uri = typeof values?.mongo_uri === "string" ? values.mongo_uri.trim() : "";
+  if (!/^mongodb(\+srv)?:\/\//.test(uri)) {
+    return undefined;
+  }
+  const named = typeof values?.mongo_db === "string" ? values.mongo_db.trim() : "";
+  const db = named || databaseFromUri(uri);
+  if (!db) {
+    return undefined;
+  }
+  return { uri, db };
 }
 
 export function databaseFromUri(uri: string): string {

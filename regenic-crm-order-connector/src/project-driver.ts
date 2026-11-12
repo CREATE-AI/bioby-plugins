@@ -6,22 +6,27 @@ import {
   type JsonValue,
   type SyncSource,
 } from "@regenic/domain";
+import { brandIdsOf, pageChoices } from "./brands";
 import { freshDirectoryMemory, listDirectoryPage, pageSelectedHeads } from "./directory";
 import {
   asSyncError,
   boundedInt,
   databaseFromUri,
   pollResult,
+  connectionFromFormValues,
   readConnection,
+  readSavedMongo,
   rememberDeliveryCursor,
   selectStoredCursor,
 } from "./driver";
+import { bindPushWebhook, clearPushArmed, kickPush, markPushArmed, pushArmed, readPushProgress, startProjectPush, stopPush } from "./push";
 import {
-  DEFAULT_CONCURRENCY,
   DEFAULT_PROJECT_RECENT,
   DEFAULT_PROJECT_REFRESH_MS,
+  ORDER_PAGE_SIZE,
   PAGE_SIZE,
   PROJECT_CONNECTOR_TYPE,
+  PROJECT_DIRECTORY_PAGE,
   PROJECT_RECENT_MAX,
   PROJECT_SOURCE,
   projectStreamKey,
@@ -29,7 +34,7 @@ import {
   projectThreadId,
 } from "./locators";
 import type { ProjectHead } from "./model";
-import { projectStore } from "./mongo-store";
+import { listBrandChoices, projectStore } from "./mongo-store";
 import { projectLocaleTables } from "./project-locales";
 import { advanceProject, parseProjectCursor } from "./project-sync";
 
@@ -45,6 +50,7 @@ export function resetProjectDirectoryMemory(now = Date.now()): void {
 export const crmProjectSyncDriver: ChannelDriver = {
   connector_type: PROJECT_CONNECTOR_TYPE,
   source: PROJECT_SOURCE,
+  source_mode: "webhook",
 
   install(input) {
     return {
@@ -67,6 +73,42 @@ export const crmProjectSyncDriver: ChannelDriver = {
 
   ownsThread(installation, thread) {
     return this.matchesThread(installation, thread);
+  },
+
+  async startInstallation(installation, host) {
+    markPushArmed(installation.id);
+    startProjectPush({
+      installation,
+      intervalMs: refreshOf(installation),
+      concurrency: 4,
+      pageSize: ORDER_PAGE_SIZE,
+      listHeads: async () => {
+        const brands = brandIdsOf(installation.config);
+        if (brands.length === 0) {
+          return [];
+        }
+        const store = await openProjectStore(installation, host);
+        const mode = projectSelectionOf(installation.config);
+        const limit = mode === "recent" ? projectRecentOf(installation.config) : null;
+        return store.listProjects(limit, brands);
+      },
+      readProject: async (projectId) => {
+        const store = await openProjectStore(installation, host);
+        return { project: await store.readProjectInfo(projectId), store };
+      },
+    });
+  },
+
+  async stopInstallation(installation, _host, context) {
+    stopPush(installation.id);
+    if (context?.reason === "delete") {
+      clearPushArmed(installation.id);
+    }
+  },
+
+  bindWebhook(installation) {
+    kickPush(installation.id);
+    return Promise.resolve(bindPushWebhook(installation, PROJECT_SOURCE));
   },
 
   capabilities(installation) {
@@ -93,11 +135,12 @@ export const crmProjectSyncDriver: ChannelDriver = {
         try {
           const store = await openProjectStore(installation, host);
           const mode = projectSelectionOf(installation.config);
+          const brands = brandIdsOf(installation.config);
           const limit = mode === "recent" ? projectRecentOf(installation.config) : null;
-          const key = `${mode}:${limit ?? ""}`;
+          const key = `${mode}:${limit ?? ""}:${brands.join(",")}`;
           return await listDirectoryPage<ProjectHead>({
             cursor,
-            concurrency: concurrencyOf(installation),
+            concurrency: PROJECT_DIRECTORY_PAGE,
             now: Date.now(),
             memory: projectDirectory,
             kind: "project",
@@ -106,7 +149,7 @@ export const crmProjectSyncDriver: ChannelDriver = {
             listOpenIds: async (afterId, pageLimit) => {
               if (!heads || headsKey !== key || !afterId) {
                 headsKey = key;
-                heads = await store.listProjects(limit);
+                heads = await store.listProjects(limit, brands);
               }
               return pageSelectedHeads(heads, afterId, pageLimit);
             },
@@ -184,12 +227,11 @@ export const crmProjectSyncDriver: ChannelDriver = {
         {
           key: "mongo_uri",
           type: "string" as const,
-          widget: "password" as const,
+          widget: "text" as const,
           label: "field.mongoUri",
           description: "field.mongoUri.description",
           group: "group.connection",
-          required: true,
-          secret: true,
+          required: false,
           placeholder: "field.mongoUri.placeholder",
         },
         {
@@ -201,6 +243,20 @@ export const crmProjectSyncDriver: ChannelDriver = {
           group: "group.connection",
           required: false,
           placeholder: "field.mongoDb.placeholder",
+        },
+        {
+          key: "brand_ids",
+          type: "string_array" as const,
+          widget: "multi_select" as const,
+          label: "field.brands",
+          description: "field.brands.description",
+          group: "group.scope",
+          required: false,
+          multiple: true,
+          dynamic_options: true,
+          options_depends_on: ["mongo_uri", "mongo_db"],
+          option_labels_key: "brand_names",
+          placeholder: "field.brands.placeholder",
         },
         {
           key: "selection",
@@ -242,19 +298,6 @@ export const crmProjectSyncDriver: ChannelDriver = {
           min: 5_000,
           max: 3_600_000,
         },
-        {
-          key: "sync_concurrency",
-          type: "number" as const,
-          widget: "number" as const,
-          label: "field.concurrency",
-          description: "field.concurrency.description",
-          group: "group.advanced",
-          advanced: true,
-          required: false,
-          default: DEFAULT_CONCURRENCY,
-          min: 1,
-          max: 20,
-        },
       ],
       install_confirm: {
         when: { field: "selection", value: "all" },
@@ -272,6 +315,21 @@ export const crmProjectSyncDriver: ChannelDriver = {
     };
   },
 
+  async listCatalogFieldOptionsPage({ env, field, query, cursor, limit, values }) {
+    if (field !== "brand_ids") {
+      return { options: [] };
+    }
+    const saved = connectionFromFormValues(values) ?? await readSavedMongo(env, [PROJECT_CONNECTOR_TYPE, "crm-delivery-sync"]);
+    if (!saved) {
+      return { options: [] };
+    }
+    try {
+      return pageChoices(await listBrandChoices(saved.uri, saved.db), query, cursor, limit);
+    } catch {
+      throw new ChannelDriverError("sync_failed", "读取品牌失败");
+    }
+  },
+
   async probeCatalog() {
     return {
       services: {
@@ -281,6 +339,11 @@ export const crmProjectSyncDriver: ChannelDriver = {
   },
 };
 
+Object.assign(crmProjectSyncDriver, {
+  readPushProgress: (installationId: string) => readPushProgress(installationId, PROJECT_SOURCE),
+  pushArmed,
+});
+
 export function projectInstallConfig(config: Record<string, unknown>): Record<string, JsonValue> {
   const uri = stringOf(config.mongo_uri);
   if (uri && !/^mongodb(\+srv)?:\/\//.test(uri)) {
@@ -288,14 +351,24 @@ export function projectInstallConfig(config: Record<string, unknown>): Record<st
   }
   const db = stringOf(config.mongo_db) || (uri ? databaseFromUri(uri) : "");
   const selection = projectSelectionOf(config);
+  const brandIds = brandIdsOf(config);
+  const brandNames = stringList(config.brand_names);
   return {
     ...(uri ? { mongo_uri: uri } : {}),
     ...(db ? { mongo_db: db } : {}),
     refresh_interval_ms: boundedInt(config.refresh_interval_ms, DEFAULT_PROJECT_REFRESH_MS, 5_000, 3_600_000),
-    sync_concurrency: boundedInt(config.sync_concurrency, DEFAULT_CONCURRENCY, 1, 20),
     selection,
+    brand_ids: brandIds,
+    ...(brandNames.length > 0 && brandNames.length === brandIds.length ? { brand_names: brandNames } : {}),
     ...(selection === "recent" ? { recent_limit: projectRecentOf(config) } : {}),
   };
+}
+
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => (typeof item === "string" ? item.trim() : "")).filter((item) => item.length > 0);
+  }
+  return typeof value === "string" ? value.split(",").map((item) => item.trim()).filter((item) => item.length > 0) : [];
 }
 
 export function projectSelectionOf(config: Record<string, unknown>): "all" | "recent" {
@@ -313,10 +386,6 @@ async function openProjectStore(installation: ConnectorInstallation, host: Conne
 
 function refreshOf(installation: ConnectorInstallation): number {
   return boundedInt(installation.config.refresh_interval_ms, DEFAULT_PROJECT_REFRESH_MS, 5_000, 3_600_000);
-}
-
-function concurrencyOf(installation: ConnectorInstallation): number {
-  return boundedInt(installation.config.sync_concurrency, DEFAULT_CONCURRENCY, 1, 20);
 }
 
 function stringOf(value: unknown): string {

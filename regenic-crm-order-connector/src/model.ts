@@ -117,6 +117,7 @@ export interface OpenOrderHead {
   nickname?: string;
   projectName?: string;
   bloggerLink?: string;
+  status?: string;
 }
 
 export interface IdPage<T> {
@@ -130,9 +131,10 @@ export interface PageQuery {
 }
 
 export interface DeliveryStore {
-  listOpenIds(afterId: string | null, limit: number): Promise<OpenOrderHead[]>;
-  listRecentHeads(limit: number): Promise<OpenOrderHead[]>;
-  listHeadsByIds(ids: string[]): Promise<OpenOrderHead[]>;
+  /** brandIds 不传表示不按品牌收。传入（含空数组）就只收这些品牌下的订单。 */
+  listOpenIds(afterId: string | null, limit: number, brandIds?: string[]): Promise<OpenOrderHead[]>;
+  listRecentHeads(limit: number, brandIds?: string[]): Promise<OpenOrderHead[]>;
+  listHeadsByIds(ids: string[], brandIds?: string[]): Promise<OpenOrderHead[]>;
   readOrder(id: string): Promise<OrderDoc | null>;
   readProject(id: string): Promise<ProjectDoc | null>;
   listMails(order: OrderDoc, query: PageQuery, limit: number): Promise<IdPage<MailDoc>>;
@@ -170,15 +172,6 @@ export interface ProjectInfoDoc extends ProjectDoc {
   createdTime?: string;
 }
 
-export interface ProjectLogDoc {
-  id: string;
-  operationType?: string;
-  message?: string;
-  actorType?: string;
-  createdAt?: string;
-  metadata: Record<string, unknown>;
-}
-
 export interface ProjectOrderRow {
   id: string;
   nickname?: string;
@@ -193,12 +186,11 @@ export interface ProjectOrderRow {
 }
 
 export interface ProjectStore {
-  /** 没删除的项目，创建时间从新到旧。limit 为 null 时取全部。 */
-  listProjects(limit: number | null): Promise<ProjectHead[]>;
+  /** 没删除的项目，创建时间从新到旧。limit 为 null 时取全部。brandIds 不传表示不按品牌收。 */
+  listProjects(limit: number | null, brandIds?: string[]): Promise<ProjectHead[]>;
   /** 给出的项目里，已经删除或者库里没有了的那些。 */
   listGoneProjects(ids: string[]): Promise<string[]>;
   readProjectInfo(id: string): Promise<ProjectInfoDoc | null>;
-  listProjectLogs(projectId: string, afterId: string | null, limit: number): Promise<IdPage<ProjectLogDoc>>;
   listProjectOrders(projectId: string, limit: number): Promise<ProjectOrderRow[]>;
   readOrderRows(ids: string[]): Promise<ProjectOrderRow[]>;
 }

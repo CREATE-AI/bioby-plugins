@@ -9,12 +9,13 @@ const { PROJECT_SOURCE, projectStreamKey } = require("../dist/locators");
 
 test("project steps stay on the project conversation", () => {
   assert.equal(conversationId(PROJECT_SOURCE, "p1:order-a"), "crm-project:p1");
-  assert.equal(conversationId(PROJECT_SOURCE, "p1:log-abc"), "crm-project:p1");
+  assert.equal(conversationId(PROJECT_SOURCE, "p1:context"), "crm-project:p1");
 });
 
 test("project install keeps newest by default and only offers newest or all", () => {
   const config = projectInstallConfig({ mongo_uri: "mongodb://localhost:27017/crm" });
   assert.equal(config.selection, "recent");
+  assert.deepEqual(config.brand_ids, []);
   assert.equal(config.recent_limit, 30);
   assert.equal(config.mongo_db, "crm");
   const all = projectInstallConfig({ mongo_db: "crm", selection: "all" });
@@ -27,7 +28,11 @@ test("project install keeps newest by default and only offers newest or all", ()
   const selection = catalog.fields.find((field) => field.key === "selection");
   assert.deepEqual(selection.options.map((option) => option.value), ["recent", "all"]);
   assert.equal(selection.default, "recent");
-  assert.equal(catalog.fields.find((field) => field.key === "mongo_uri").secret, true);
+  assert.equal(catalog.fields.find((field) => field.key === "mongo_uri").widget, "text");
+  assert.equal(catalog.fields.find((field) => field.key === "mongo_uri").secret, undefined);
+  const brands = catalog.fields.find((field) => field.key === "brand_ids");
+  assert.equal(brands.multiple, true);
+  assert.equal(brands.widget, "multi_select");
   assert.equal(catalog.install_confirm.when.value, "all");
 });
 
@@ -37,15 +42,8 @@ test("project driver only owns project conversations", () => {
   assert.equal(crmProjectSyncDriver.matchesThread(installation, { source: "crm-delivery", target: "a" }), false);
 });
 
-test("a new project writes info, status, activity and its in-delivery orders", async () => {
+test("a new project writes info, status and its in-delivery orders, not project logs", async () => {
   const store = projectStore({
-    logs: [
-      log("l1", "PROJECT_CREATED", { message: "initialise successfully" }),
-      log("l2", "ORDER_CUSTOMER_REVIEW_DELIVERY", {
-        metadata: { projectFieldId: "a", stage: "DELIVERY", reviewResult: "REJECTED", reviewType: "VIDEO" },
-      }),
-      log("l3", "ONE_CLICK_SUBMIT", { message: "已批量提报5个达人", metadata: { submittedCount: 5 } }),
-    ],
     orders: [orderRow("a", { status: "VIDEO_DRAFT_REVIEWING" }), orderRow("b", { nickname: "小红", status: "FOLLOWING" })],
   });
   const { records, cursor } = await runUntilLive(projectInfo(), store);
@@ -59,14 +57,7 @@ test("a new project writes info, status, activity and its in-delivery orders", a
   assert.match(context, /项目权益：一条视频/);
   assert.doesNotMatch(context, /截止日期/);
   assert.match(recordText([...byStep.entries()].find(([key]) => key.startsWith("status-"))[1]), /项目状态：进行中/);
-  assert.equal(recordText(byStep.get("log-l1")), "项目创建\n操作方：用户");
-  const review = recordText(byStep.get("log-l2"));
-  assert.match(review, /客户审核交付内容/);
-  assert.match(review, /结果：驳回/);
-  assert.match(review, /审核内容：视频草稿/);
-  assert.match(review, /达人：小明/);
-  assert.match(review, /订单会话：crm-delivery:a/);
-  assert.match(recordText(byStep.get("log-l3")), /已批量提报5个达人/);
+  assert.equal(records.some((record) => record.external_id.includes(":log-")), false);
   const orderA = recordText(byStep.get("order-a"));
   assert.match(orderA, /交付状态：视频草稿审核/);
   assert.match(orderA, /订单会话：crm-delivery:a/);
@@ -78,10 +69,9 @@ test("a new project writes info, status, activity and its in-delivery orders", a
   assert.match(recordText(inbox), /收件箱/);
 });
 
-test("later polls add new activity, a status message, and update order lines", async () => {
-  const store = projectStore({ logs: [log("l1", "PROJECT_CREATED")], orders: [orderRow("a"), orderRow("b")] });
+test("later polls add a status message and update order lines, not project logs", async () => {
+  const store = projectStore({ orders: [orderRow("a"), orderRow("b")] });
   const first = await runUntilLive(projectInfo(), store);
-  store.logs.push(log("l2", "PROJECT_RESUBMIT", { metadata: { fieldCount: 2 } }));
   store.orders = [orderRow("a", { status: "PENDING_PUBLISH" }), orderRow("c", { nickname: "小刚" })];
   store.rows.set("b", orderRow("b", { status: "SETTLED_COMPLETED", inDeliveryView: false }));
   const next = await advanceProject({
@@ -96,7 +86,7 @@ test("later polls add new activity, a status message, and update order lines", a
   const find = (prefix) => steps.find(([key]) => key.startsWith(prefix))?.[1];
   assert.match(recordText(find("context-")), /项目信息有更新[\s\S]*需求：新需求/);
   assert.equal(recordText(find("status-")), "项目状态：进行中 → 暂停");
-  assert.equal(recordText(find("log-l2")), "重新提报\n重新提报人数：2\n操作方：用户");
+  assert.equal(next.records.some((record) => record.external_id.includes(":log-")), false);
   assert.equal(find("order-a").operation, "revise");
   assert.match(recordText(find("order-a")), /待发布/);
   assert.equal(find("order-b").operation, "revise");
@@ -113,6 +103,37 @@ test("later polls add new activity, a status message, and update order lines", a
     now: "2026-11-08T01:00:00.000Z",
   });
   assert.equal(quiet.records.length, 0);
+});
+
+test("logs remembered on the cursor are taken out and not copied again", async () => {
+  const store = projectStore({ orders: [orderRow("a")] });
+  const cursor = parseProjectCursor(JSON.stringify({
+    ...emptyProjectCursor(),
+    stage: "logs",
+    fp: { "log-l1": "kept", context: "stay" },
+  }));
+  assert.equal(cursor.stage, "orders");
+  const first = await advanceProject({
+    projectId: "p1",
+    project: projectInfo(),
+    store,
+    cursor,
+    pageSize: 20,
+    now: "2026-11-06T10:00:00.000Z",
+  });
+  const gone = first.records.find((record) => record.external_id === "p1:log-l1");
+  assert.equal(gone.operation, "tombstone");
+  assert.equal(first.cursor.fp["log-l1"], undefined);
+  assert.equal(first.records.some((record) => record.operation !== "tombstone" && record.external_id.includes(":log-")), false);
+  const again = await advanceProject({
+    projectId: "p1",
+    project: projectInfo(),
+    store,
+    cursor: parseProjectCursor(JSON.stringify(first.cursor)),
+    pageSize: 20,
+    now: "2026-11-06T11:00:00.000Z",
+  });
+  assert.equal(again.records.some((record) => record.external_id.includes(":log-")), false);
 });
 
 test("a deleted project writes one end message", async () => {
@@ -139,6 +160,28 @@ test("a deleted project writes one end message", async () => {
   });
   assert.equal(again.records.length, 0);
   assert.equal(again.wroteEnd, true);
+});
+
+test("one directory page can hand over every project in the list", async () => {
+  const memory = freshDirectoryMemory(0);
+  const heads = Array.from({ length: 40 }, (_, index) => ({ id: `p${index}`, name: `项目${index}` }));
+  const page = (cursor) => listDirectoryPage({
+    cursor,
+    concurrency: 5000,
+    now: 0,
+    memory,
+    restartWaitMs: 0,
+    kind: "project",
+    member: (id) => ({ stream_key: projectStreamKey(id), thread_id: projectStreamKey(id) }),
+    labelOf: (row) => row.name,
+    listOpenIds: async (afterId, limit) => pageSelectedHeads(heads, afterId, limit),
+  });
+  const first = await page(null);
+  assert.equal(first.members.length, 40);
+  assert.equal(first.complete, false);
+  const done = await page(first.next_cursor);
+  assert.equal(done.complete, true);
+  assert.equal(done.members.length, 0);
 });
 
 test("a project pushed out of the newest list is let go, a deleted one waits for its end", async () => {
@@ -281,17 +324,6 @@ function projectInfo(extra = {}) {
   };
 }
 
-function log(id, operationType, extra = {}) {
-  return {
-    id,
-    operationType,
-    actorType: "USER",
-    createdAt: `2026-11-0${Math.min(9, 2 + Number(id.slice(1)))}T00:00:00.000Z`,
-    metadata: {},
-    ...extra,
-  };
-}
-
 function orderRow(id, extra = {}) {
   return {
     id,
@@ -308,7 +340,6 @@ function orderRow(id, extra = {}) {
 
 function projectStore(seed) {
   const store = {
-    logs: seed.logs ?? [],
     orders: seed.orders ?? [],
     rows: new Map(),
     async listProjects() {
@@ -319,10 +350,6 @@ function projectStore(seed) {
     },
     async readProjectInfo() {
       return null;
-    },
-    async listProjectLogs(_projectId, afterId, limit) {
-      const rest = store.logs.filter((item) => !afterId || item.id > afterId);
-      return { items: rest.slice(0, limit), full: rest.length > limit };
     },
     async listProjectOrders() {
       return store.orders;

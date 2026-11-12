@@ -15,8 +15,31 @@ export const OPEN_STATUSES = [
   "LONG_TERM_NO_REPLY",
   "PENDING_PUBLISH",
   "PUBLISHED",
-  "ABNORMAL_HANDLING",
 ] as const;
+
+/** 这些交付状态表示订单已结束。会话写成 done，之后不再追加。 */
+export const ENDED_STATUSES = [
+  "COMPLETED",
+  "SETTLED_COMPLETED",
+  "ABANDONED",
+  "CANCELLED",
+  "CUSTOMER_CANCELLED",
+  "ABNORMAL_HANDLING",
+  "PROJECT_DELAYED_OR_PAUSED",
+] as const;
+
+const ENDED = new Set<string>(ENDED_STATUSES);
+const ENDED_LABELS = new Set([
+  "已完成",
+  "已完结",
+  "已结清",
+  "已结清-完结",
+  "已放弃",
+  "已取消",
+  "客户取消",
+  "异常处理",
+  "项目延期/暂停",
+]);
 
 const LABELS: Record<string, string> = {
   TO_FOLLOW_UP: "待跟进",
@@ -57,4 +80,12 @@ export function statusLabel(status: string | undefined): string {
 
 export function isOpenStatus(status: string | undefined): boolean {
   return Boolean(status && OPEN.has(status));
+}
+
+export function isEndedStatus(status: string | undefined): boolean {
+  if (!status) {
+    return false;
+  }
+  const raw = status.trim();
+  return ENDED.has(raw) || ENDED_LABELS.has(raw) || ENDED_LABELS.has(statusLabel(raw));
 }
