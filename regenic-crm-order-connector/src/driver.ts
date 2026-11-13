@@ -74,24 +74,7 @@ export const crmDeliverySyncDriver: ChannelDriver = {
 
   async startInstallation(installation, host) {
     markPushArmed(installation.id);
-    startDeliveryPush({
-      installation,
-      intervalMs: refreshOf(installation),
-      concurrency: concurrencyOf(installation),
-      pageSize: ORDER_PAGE_SIZE,
-      listHeads: async () => {
-        if (brandIdsOf(installation.config).length === 0) {
-          return [];
-        }
-        return listScopedOrderHeads(await openStore(installation, host), installation.config);
-      },
-      readOrder: async (orderId) => {
-        const store = await openStore(installation, host);
-        const order = await store.readOrder(orderId);
-        const project = order?.projectId ? await store.readProject(order.projectId) : null;
-        return { order, project, store };
-      },
-    });
+    startDeliveryPush(deliveryPushInput(installation, () => openStore(installation, host)));
   },
 
   async stopInstallation(installation, _host, context) {
@@ -455,6 +438,46 @@ async function openStore(installation: ConnectorInstallation, host: ConnectorHos
   return mongoStore(uri, db);
 }
 
+export function resumeDeliveryPush(installation: ConnectorInstallation): void {
+  startDeliveryPush(deliveryPushInput(installation, async () => {
+    const { uri, db } = connectionFromConfig(installation.config);
+    return mongoStore(uri, db);
+  }));
+}
+
+function deliveryPushInput(
+  installation: ConnectorInstallation,
+  open: () => Promise<DeliveryStore>,
+) {
+  return {
+    installation,
+    intervalMs: refreshOf(installation),
+    concurrency: concurrencyOf(installation),
+    pageSize: ORDER_PAGE_SIZE,
+    listHeads: async () => {
+      if (brandIdsOf(installation.config).length === 0) {
+        return [];
+      }
+      return listScopedOrderHeads(await open(), installation.config);
+    },
+    readOrder: async (orderId: string) => {
+      const store = await open();
+      const order = await store.readOrder(orderId);
+      const project = order?.projectId ? await store.readProject(order.projectId) : null;
+      return { order, project, store };
+    },
+  };
+}
+
+export function connectionFromConfig(config: Record<string, unknown>): { uri: string; db: string } {
+  const uri = stringOf(config.mongo_uri);
+  const db = stringOf(config.mongo_db) || (uri ? databaseFromUri(uri) : "");
+  if (!/^mongodb(\+srv)?:\/\//.test(uri) || !db) {
+    throw new ChannelDriverError("missing_credentials", "没有 MongoDB 连接串");
+  }
+  return { uri, db };
+}
+
 export async function readConnection(
   connectorType: string,
   installation: ConnectorInstallation,
@@ -477,6 +500,10 @@ async function readUri(
   installation: ConnectorInstallation,
   host: ConnectorHost,
 ): Promise<string> {
+  const fromConfig = stringOf(installation.config.mongo_uri);
+  if (fromConfig) {
+    return fromConfig;
+  }
   const key = `${connectorType}\u0000${installation.id}`;
   const now = Date.now();
   let cached = uriCache.get(key);
@@ -689,8 +716,9 @@ async function readSavedInstallation(
       return undefined;
     }
     const config = parseStoredConfig(rawConfig);
-    const stored = await readInstallSecret(connectorType, id, "mongo_uri");
-    const uri = stringOf(config.mongo_uri) || stored?.trim() || "";
+    const fromConfig = stringOf(config.mongo_uri);
+    const stored = fromConfig ? undefined : await readInstallSecret(connectorType, id, "mongo_uri");
+    const uri = fromConfig || stored?.trim() || "";
     const db = stringOf(config.mongo_db) || databaseFromUri(uri);
     if (!uri || !db) {
       return undefined;
@@ -775,7 +803,7 @@ export function boundedInt(value: unknown, fallback: number, min: number, max: n
   return Math.max(min, Math.min(max, Math.floor(parsed)));
 }
 
-/** 安装页上刚填的地址优先。密码框空着时，再用已经保存的连接。 */
+/** 安装页上刚填的地址优先。输入框空着时，再用已经保存的连接。 */
 export function connectionFromFormValues(
   values: Record<string, unknown> | undefined,
 ): { uri: string; db: string } | undefined {

@@ -13,6 +13,7 @@ import {
   boundedInt,
   databaseFromUri,
   pollResult,
+  connectionFromConfig,
   connectionFromFormValues,
   readConnection,
   readSavedMongo,
@@ -33,7 +34,7 @@ import {
   projectSubjectCatalog,
   projectThreadId,
 } from "./locators";
-import type { ProjectHead } from "./model";
+import type { ProjectHead, ProjectStore } from "./model";
 import { listBrandChoices, projectStore } from "./mongo-store";
 import { projectLocaleTables } from "./project-locales";
 import { advanceProject, parseProjectCursor } from "./project-sync";
@@ -77,26 +78,7 @@ export const crmProjectSyncDriver: ChannelDriver = {
 
   async startInstallation(installation, host) {
     markPushArmed(installation.id);
-    startProjectPush({
-      installation,
-      intervalMs: refreshOf(installation),
-      concurrency: 4,
-      pageSize: ORDER_PAGE_SIZE,
-      listHeads: async () => {
-        const brands = brandIdsOf(installation.config);
-        if (brands.length === 0) {
-          return [];
-        }
-        const store = await openProjectStore(installation, host);
-        const mode = projectSelectionOf(installation.config);
-        const limit = mode === "recent" ? projectRecentOf(installation.config) : null;
-        return store.listProjects(limit, brands);
-      },
-      readProject: async (projectId) => {
-        const store = await openProjectStore(installation, host);
-        return { project: await store.readProjectInfo(projectId), store };
-      },
-    });
+    startProjectPush(projectPushInput(installation, () => openProjectStore(installation, host)));
   },
 
   async stopInstallation(installation, _host, context) {
@@ -382,6 +364,39 @@ function projectRecentOf(config: Record<string, unknown>): number {
 async function openProjectStore(installation: ConnectorInstallation, host: ConnectorHost) {
   const { uri, db } = await readConnection(PROJECT_CONNECTOR_TYPE, installation, host);
   return projectStore(uri, db);
+}
+
+export function resumeProjectPush(installation: ConnectorInstallation): void {
+  startProjectPush(projectPushInput(installation, async () => {
+    const { uri, db } = connectionFromConfig(installation.config);
+    return projectStore(uri, db);
+  }));
+}
+
+function projectPushInput(
+  installation: ConnectorInstallation,
+  open: () => Promise<ProjectStore>,
+) {
+  return {
+    installation,
+    intervalMs: refreshOf(installation),
+    concurrency: 4,
+    pageSize: ORDER_PAGE_SIZE,
+    listHeads: async () => {
+      const brands = brandIdsOf(installation.config);
+      if (brands.length === 0) {
+        return [];
+      }
+      const store = await open();
+      const mode = projectSelectionOf(installation.config);
+      const limit = mode === "recent" ? projectRecentOf(installation.config) : null;
+      return store.listProjects(limit, brands);
+    },
+    readProject: async (projectId: string) => {
+      const store = await open();
+      return { project: await store.readProjectInfo(projectId), store };
+    },
+  };
 }
 
 function refreshOf(installation: ConnectorInstallation): number {

@@ -29,7 +29,8 @@ const { influencerMailScope } = require("../dist/mongo-store");
 const { compactTime } = require("../dist/time");
 const { SOURCE } = require("../dist/locators");
 const { brandIdsOf, pageChoices } = require("../dist/brands");
-const { clearPushArmed, markPushArmed, pushArmed, pushBatchAdvances, pushRequestAccepted, pushToken, readPushProgress, resetPushState, runPushQueues, splitPushLanes } = require("../dist/push");
+const { clearPushArmed, isPushRunning, markPushArmed, pushArmed, pushBatchAdvances, pushRequestAccepted, pushToken, readPushProgress, resetPushState, runPushQueues, splitPushLanes, startDeliveryPush, stopPush } = require("../dist/push");
+const { resumeArmedPush } = require("../dist/push-resume");
 
 test("a typed database address is used before a saved one", () => {
   assert.deepEqual(connectionFromFormValues({
@@ -172,6 +173,64 @@ test("sync stays on after the first click until uninstall", () => {
   assert.equal(pushArmed(id), true);
   clearPushArmed(id);
   assert.equal(pushArmed(id), false);
+});
+
+test("an armed installation is resumed after restart until its config changes", () => {
+  const dir = mkdtempSync(join(tmpdir(), "crm-push-resume-"));
+  const databasePath = join(dir, "regenic.db");
+  const id = `push-resume-${process.pid}`;
+  const database = new DatabaseSync(databasePath);
+  database.exec(`CREATE TABLE connector_installations (
+    id TEXT PRIMARY KEY,
+    org_id TEXT,
+    connector_type TEXT,
+    status TEXT,
+    config_json TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  )`);
+  const insert = database.prepare(`INSERT INTO connector_installations
+    (id, org_id, connector_type, status, config_json, created_at, updated_at)
+    VALUES (?, 'local-owner', 'crm-delivery-sync', 'enabled', ?, '2026-11-13T00:00:00.000Z', ?)`);
+  const config = JSON.stringify({ mongo_uri: "mongodb://localhost:27017/crm", mongo_db: "crm", brand_ids: ["b1"] });
+  insert.run(id, config, "v1");
+  database.close();
+  clearPushArmed(id);
+  const calls = [];
+  const starters = [{
+    connectorType: "crm-delivery-sync",
+    start(installation) {
+      calls.push(installation.updated_at);
+      startDeliveryPush({
+        installation,
+        intervalMs: 60_000,
+        concurrency: 1,
+        pageSize: 1,
+        listHeads: async () => [],
+        readOrder: async () => {
+          throw new Error("unused");
+        },
+      });
+    },
+  }];
+  const env = { REGENIC_DATABASE: databasePath };
+  resumeArmedPush(starters, env);
+  assert.deepEqual(calls, []);
+  markPushArmed(id);
+  resumeArmedPush(starters, env);
+  assert.deepEqual(calls, ["v1"]);
+  resumeArmedPush(starters, env);
+  assert.deepEqual(calls, ["v1"]);
+  const again = new DatabaseSync(databasePath);
+  again.prepare("UPDATE connector_installations SET updated_at = ? WHERE id = ?").run("v2", id);
+  again.close();
+  resumeArmedPush(starters, env);
+  assert.deepEqual(calls, ["v1", "v2"]);
+  assert.equal(isPushRunning(id), true);
+  stopPush(id);
+  clearPushArmed(id);
+  resetPushState();
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("push webhook only accepts the token from this process", () => {

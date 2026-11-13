@@ -53,6 +53,10 @@ export function resetPushState(): void {
   threadCache.clear();
 }
 
+export function isPushRunning(installationId: string): boolean {
+  return runs.has(installationId);
+}
+
 export function stopPush(installationId: string): void {
   wakes.delete(installationId);
   runs.get(installationId)?.abort();
@@ -374,6 +378,9 @@ function startLoop(input: {
   skip?: (row: { id: string; status?: string }) => boolean;
   pushOne: (row: { id: string; status?: string }, signal: AbortSignal) => Promise<void>;
 }): void {
+  if (runs.has(input.installation.id)) {
+    return;
+  }
   stopPush(input.installation.id);
   const abort = new AbortController();
   runs.set(input.installation.id, abort);
@@ -624,6 +631,7 @@ function sleep(ms: number, signal: AbortSignal, installationId: string): Promise
       resolve();
     };
     const timer = setTimeout(finish, ms);
+    timer.unref?.();
     signal.addEventListener("abort", finish);
     wakes.set(installationId, finish);
   });

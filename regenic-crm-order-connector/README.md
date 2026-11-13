@@ -8,7 +8,7 @@
 
 ## 安装
 
-跑这个插件的 Regenic 进程要能连上 CRM 的 MongoDB。连接串填在安装表单里，会进钥匙串，不留在安装配置里。
+跑这个插件的 Regenic 进程要能连上 CRM 的 MongoDB。连接串填在安装表单里，是普通文本，留在安装配置里，设置页上能看到。点过一次同步之后，Regenic 重启也会在大约 8 秒后把推送重新拉起，之后每 20 秒检查一次。配置变了会按新配置重开。
 
 用 `REGENIC_PLUGIN_DIR` 指到 `bioby-plugins`，或用 `REGENIC_CHANNEL_PLUGIN` 指到本目录。
 
