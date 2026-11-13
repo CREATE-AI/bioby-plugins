@@ -351,6 +351,9 @@ async function client(uri: string): Promise<MongoClient> {
   const opening = MongoClient.connect(uri, {
     serverSelectionTimeoutMS: 8_000,
     readPreference: "secondaryPreferred",
+    // 变更记录里偶尔夹着半个表情：只有 UTF-16 高位，低位没写进库。
+    // 严格按 UTF-8 会整张订单读失败。关掉校验后，这一处换成替换字符，其余文字照常读。
+    enableUtf8Validation: false,
   });
   clients.set(uri, opening);
   try {
