@@ -1,5 +1,9 @@
-import { DatabaseSync } from "node:sqlite";
 import type { ConnectorInstallation, JsonValue } from "@regenic/domain";
+import {
+  forgetInstallation,
+  listRememberedInstallations,
+  refreshInstallationsFromKernel,
+} from "./installation-snapshot";
 import { isPushRunning, pushArmed, stopPush } from "./push";
 
 const RESUME_DELAY_MS = 8_000;
@@ -23,7 +27,8 @@ export function watchArmedPush(starters: readonly ArmedPushStarter[]): void {
         return;
       }
       try {
-        resumeArmedPush(starters);
+        const listed = await refreshInstallationsFromKernel();
+        resumeArmedPush(starters, listed);
       } catch (error) {
         const message = error instanceof Error ? error.message : "重新拉起推送失败";
         console.error(`[crm-push] ${message}`);
@@ -38,105 +43,63 @@ export function watchArmedPush(starters: readonly ArmedPushStarter[]): void {
 
 export function resumeArmedPush(
   starters: readonly ArmedPushStarter[],
-  env: NodeJS.ProcessEnv = process.env,
+  listed?: readonly ConnectorInstallation[],
 ): void {
-  const path = env.REGENIC_DATABASE?.trim();
-  if (!path || starters.length === 0) {
+  if (starters.length === 0) {
     return;
   }
-  let database: DatabaseSync;
-  try {
-    database = new DatabaseSync(path, { readOnly: true, timeout: 1_000, enableForeignKeyConstraints: false });
-  } catch {
-    return;
-  }
-  try {
-    const placeholders = starters.map(() => "?").join(", ");
-    const rows = database.prepare(
-      `SELECT id, org_id, connector_type, status, config_json, created_at, updated_at
-       FROM connector_installations
-       WHERE connector_type IN (${placeholders})`,
-    ).all(...starters.map((item) => item.connectorType)) as Array<Record<string, unknown>>;
-    const seen = new Set<string>();
-    for (const row of rows) {
-      const installation = installationFromRow(row);
-      if (!installation) {
-        continue;
-      }
-      seen.add(installation.id);
-      const starter = starters.find((item) => item.connectorType === installation.connector_type);
-      if (!starter) {
-        continue;
-      }
-      const running = isPushRunning(installation.id);
-      if (installation.status !== "enabled" || !pushArmed(installation.id) || !configHasUri(installation.config)) {
-        if (running) {
-          stopPush(installation.id);
+  const types = new Set(starters.map((item) => item.connectorType));
+  if (listed) {
+    const live = new Set(listed.map((item) => item.id));
+    for (const saved of listRememberedInstallations()) {
+      if (types.has(saved.connector_type) && !live.has(saved.id)) {
+        forgetInstallation(saved.id);
+        if (isPushRunning(saved.id)) {
+          stopPush(saved.id);
         }
-        startedRevision.delete(installation.id);
-        continue;
+        startedRevision.delete(saved.id);
       }
-      const seenRevision = startedRevision.get(installation.id);
-      if (running && seenRevision === installation.updated_at) {
-        continue;
-      }
-      if (running && seenRevision !== undefined) {
+    }
+  }
+  const rows = (listed ?? listRememberedInstallations()).filter((item) => types.has(item.connector_type));
+  const seen = new Set<string>();
+  for (const installation of rows) {
+    seen.add(installation.id);
+    const starter = starters.find((item) => item.connectorType === installation.connector_type);
+    if (!starter) {
+      continue;
+    }
+    const running = isPushRunning(installation.id);
+    if (installation.status !== "enabled" || !pushArmed(installation.id) || !configHasUri(installation.config)) {
+      if (running) {
         stopPush(installation.id);
       }
-      if (!isPushRunning(installation.id)) {
-        starter.start(installation);
-      }
-      startedRevision.set(installation.id, installation.updated_at);
+      startedRevision.delete(installation.id);
+      continue;
     }
-    for (const id of [...startedRevision.keys()]) {
-      if (!seen.has(id)) {
-        stopPush(id);
-        startedRevision.delete(id);
-      }
+    const seenRevision = startedRevision.get(installation.id);
+    if (running && seenRevision === installation.updated_at) {
+      continue;
     }
-  } finally {
-    database.close();
+    if (running && seenRevision !== undefined) {
+      stopPush(installation.id);
+    }
+    if (!isPushRunning(installation.id)) {
+      starter.start(installation);
+    }
+    startedRevision.set(installation.id, installation.updated_at);
+  }
+  for (const id of [...startedRevision.keys()]) {
+    if (!seen.has(id)) {
+      stopPush(id);
+      startedRevision.delete(id);
+    }
   }
 }
 
 function configHasUri(config: Record<string, JsonValue>): boolean {
   const uri = typeof config.mongo_uri === "string" ? config.mongo_uri.trim() : "";
   return uri.startsWith("mongodb://") || uri.startsWith("mongodb+srv://");
-}
-
-function installationFromRow(row: Record<string, unknown>): ConnectorInstallation | undefined {
-  const id = stringOf(row.id);
-  const connectorType = stringOf(row.connector_type);
-  const status = stringOf(row.status);
-  if (!id || !connectorType || (status !== "enabled" && status !== "disabled" && status !== "needs_attention")) {
-    return undefined;
-  }
-  let config: Record<string, JsonValue> = {};
-  if (typeof row.config_json === "string" && row.config_json) {
-    try {
-      const parsed = JSON.parse(row.config_json) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        config = parsed as Record<string, JsonValue>;
-      }
-    } catch {
-      return undefined;
-    }
-  }
-  const createdAt = stringOf(row.created_at) || new Date(0).toISOString();
-  const updatedAt = stringOf(row.updated_at) || createdAt;
-  return {
-    id,
-    org_id: stringOf(row.org_id),
-    connector_type: connectorType,
-    status,
-    config,
-    created_at: createdAt,
-    updated_at: updatedAt,
-  };
-}
-
-function stringOf(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
 }
 
 async function kernelAccepting(): Promise<boolean> {

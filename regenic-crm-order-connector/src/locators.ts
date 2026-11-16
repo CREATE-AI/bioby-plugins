@@ -7,8 +7,8 @@ export const UNIT_KIND_LABEL = "交付订单";
 
 export const DEFAULT_REFRESH_MS = 180_000;
 export const DEFAULT_CONCURRENCY = 4;
-/** 目录一页最多交几张订单。内核不限制这一页的张数。 */
-export const MAX_CONCURRENCY = 100;
+/** 同时往外推的订单数。表单和运行时都夹在 1 到这个数。 */
+export const MAX_CONCURRENCY = 4;
 export const DEFAULT_RECENT = 30;
 export const PAGE_SIZE = 20;
 /** 一张订单一次写入会话的条数。项目会话仍用 PAGE_SIZE。 */

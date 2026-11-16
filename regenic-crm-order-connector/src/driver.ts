@@ -11,13 +11,12 @@ import {
   type SyncSource,
 } from "@regenic/domain";
 import { createHash } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
 import {
   deliveryCursorKey,
   rememberDeliveryCursor,
-  rememberFurtherHistory,
   selectStoredCursor,
 } from "./cursor-store";
+import { refreshInstallationsFromKernel, rememberedInstallation } from "./installation-snapshot";
 import {
   listDirectoryPage,
   markDeliveryEndWritten,
@@ -160,7 +159,6 @@ export const crmDeliverySyncDriver: ChannelDriver = {
             const project = order?.projectId ? await store.readProject(order.projectId) : null;
             const now = new Date().toISOString();
             const cursorKey = deliveryCursorKey(installation.id, orderId);
-            hydrateDeliveryCursors(installation.id);
             const selected = selectStoredCursor(cursorKey, cursor?.value);
             const advanced = await advanceDelivery({
               orderId,
@@ -564,49 +562,6 @@ export {
   setDeliveryCursorDir,
 } from "./cursor-store";
 
-const hydratedCursorInstalls = new Set<string>();
-
-/** 把库里已经拉完、但复查进度还停在半路的订单补进本机记录。一个进程只做一次。 */
-export function hydrateDeliveryCursors(installationId: string, env: NodeJS.ProcessEnv = process.env): void {
-  if (hydratedCursorInstalls.has(installationId)) {
-    return;
-  }
-  hydratedCursorInstalls.add(installationId);
-  const path = env.REGENIC_DATABASE?.trim();
-  if (!path) {
-    return;
-  }
-  let database: DatabaseSync | undefined;
-  try {
-    database = new DatabaseSync(path, { readOnly: true, timeout: 1_000, enableForeignKeyConstraints: false });
-    const rows = database.prepare(
-      `SELECT stream_key, live_cursor, history_cursor
-       FROM connector_sync_state
-       WHERE installation_id = ? AND history_cursor IS NOT NULL`,
-    ).all(installationId) as Array<{
-      stream_key?: string;
-      live_cursor?: string | null;
-      history_cursor?: string | null;
-    }>;
-    for (const row of rows) {
-      if (typeof row.stream_key !== "string") {
-        continue;
-      }
-      rememberFurtherHistory({
-        installationId,
-        streamKey: row.stream_key,
-        streamPrefix: `${SOURCE}:`,
-        liveCursor: row.live_cursor,
-        historyCursor: row.history_cursor,
-      });
-    }
-  } catch {
-    // 读不到旧进度就用内核交来的游标。
-  } finally {
-    database?.close();
-  }
-}
-
 function deliveryId(
   connectorId: string,
   cursor: string | undefined,
@@ -690,58 +645,25 @@ async function readSavedInstallation(
   env: NodeJS.ProcessEnv,
   connectorType: string,
 ): Promise<{ uri: string; db: string } | undefined> {
-  const path = env.REGENIC_DATABASE?.trim();
-  if (!path) {
-    return undefined;
+  let saved = rememberedInstallation(connectorType);
+  if (!saved) {
+    await refreshInstallationsFromKernel(env);
+    saved = rememberedInstallation(connectorType);
   }
-  let database: DatabaseSync;
-  try {
-    database = new DatabaseSync(path, { readOnly: true, timeout: 1_000, enableForeignKeyConstraints: false });
-  } catch {
+  if (!saved) {
     return undefined;
   }
   try {
-    const row = database.prepare(
-      `SELECT id, config_json FROM connector_installations
-       WHERE connector_type = ?
-       ORDER BY updated_at DESC
-       LIMIT 1`,
-    ).get(connectorType);
-    if (!row || typeof row !== "object") {
-      return undefined;
-    }
-    const id = "id" in row && typeof row.id === "string" ? row.id.trim() : "";
-    const rawConfig = "config_json" in row && typeof row.config_json === "string" ? row.config_json : "";
-    if (!id) {
-      return undefined;
-    }
-    const config = parseStoredConfig(rawConfig);
-    const fromConfig = stringOf(config.mongo_uri);
-    const stored = fromConfig ? undefined : await readInstallSecret(connectorType, id, "mongo_uri");
+    const fromConfig = stringOf(saved.config.mongo_uri);
+    const stored = fromConfig ? undefined : await readInstallSecret(connectorType, saved.id, "mongo_uri");
     const uri = fromConfig || stored?.trim() || "";
-    const db = stringOf(config.mongo_db) || databaseFromUri(uri);
+    const db = stringOf(saved.config.mongo_db) || databaseFromUri(uri);
     if (!uri || !db) {
       return undefined;
     }
     return { uri, db };
   } catch {
     return undefined;
-  } finally {
-    database.close();
-  }
-}
-
-function parseStoredConfig(raw: string): Record<string, unknown> {
-  if (!raw) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
-  } catch {
-    return {};
   }
 }
 

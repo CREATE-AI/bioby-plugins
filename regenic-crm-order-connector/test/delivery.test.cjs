@@ -1,10 +1,10 @@
 const assert = require("node:assert/strict");
 const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = require("node:fs");
-const { DatabaseSync } = require("node:sqlite");
-const { homedir, tmpdir } = require("node:os");
+const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const test = require("node:test");
 const { conversationId } = require("@regenic/domain");
+const { BSON } = require("mongodb");
 const {
   freshDirectoryMemory,
   listDirectoryPage,
@@ -25,12 +25,60 @@ const {
 const { rememberFurtherHistory } = require("../dist/cursor-store");
 const { advanceDelivery, emptyOrderCursor, parseOrderCursor } = require("../dist/sync");
 const { isEndedStatus } = require("../dist/status");
-const { influencerMailScope } = require("../dist/mongo-store");
+const { influencerMailScope, pinDatabaseUri } = require("../dist/mongo-store");
+const { decodeDocument, decodeStoredText } = require("../dist/stored-text");
 const { compactTime } = require("../dist/time");
 const { SOURCE } = require("../dist/locators");
 const { brandIdsOf, pageChoices } = require("../dist/brands");
-const { clearPushArmed, isPushRunning, markPushArmed, pushArmed, pushBatchAdvances, pushRequestAccepted, pushToken, readPushProgress, resetPushState, runPushQueues, splitPushLanes, startDeliveryPush, stopPush } = require("../dist/push");
+const { clearPushArmed, isPushRunning, markPushArmed, pushArmed, pushBatchAdvances, pushRequestAccepted, pushToken, readPushProgress, rememberPushedIds, resetPushState, runPushQueues, setPushStateDir, splitPushLanes, startDeliveryPush, stopPush } = require("../dist/push");
+const { rememberInstallation } = require("../dist/installation-snapshot");
 const { resumeArmedPush } = require("../dist/push-resume");
+
+test("a half emoji is kept as the stored code", () => {
+  const half = Buffer.from([0xed, 0xa0, 0xbe]);
+  assert.equal(decodeStoredText(half).charCodeAt(0), 0xd83e);
+  assert.equal(decodeStoredText(half).includes("\uFFFD"), false);
+  assert.equal(decodeStoredText(Buffer.from([0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80])), "\u{1F600}");
+  assert.equal(decodeStoredText(Buffer.from("前😀后", "utf8")), "前😀后");
+  assert.equal(decodeStoredText(Buffer.from([0xff])).charCodeAt(0), 0xff);
+
+  const document = BSON.serialize({
+    note: "前中后",
+    n: 7,
+    when: new Date("2020-01-01T00:00:00.000Z"),
+  });
+  const mark = Buffer.from("中", "utf8");
+  const at = document.indexOf(mark);
+  document[at] = 0xed;
+  document[at + 1] = 0xa0;
+  document[at + 2] = 0xbe;
+  const decoded = decodeDocument(document);
+  const note = "前" + String.fromCharCode(0xd83e) + "后";
+  assert.equal(decoded.note, note);
+  assert.equal(decoded.n, 7);
+  assert.equal(decoded.when.toISOString(), "2020-01-01T00:00:00.000Z");
+  assert.equal(JSON.parse(JSON.stringify({ note })).note.charCodeAt(1), 0xd83e);
+});
+
+test("the connection is pinned to the configured database", () => {
+  assert.equal(
+    pinDatabaseUri("mongodb://localhost:27017/crm", "crm"),
+    "mongodb://localhost:27017/crm",
+  );
+  assert.equal(
+    pinDatabaseUri("mongodb://localhost:27017/crm", "prod"),
+    "mongodb://localhost:27017/prod?authSource=crm",
+  );
+  assert.equal(
+    pinDatabaseUri("mongodb://localhost:27017/crm?authSource=admin", "prod"),
+    "mongodb://localhost:27017/prod?authSource=admin",
+  );
+  assert.equal(
+    pinDatabaseUri("mongodb://localhost:27017", "prod"),
+    "mongodb://localhost:27017/prod?authSource=admin",
+  );
+  assert.throws(() => pinDatabaseUri("mongodb://localhost:27017/crm", "a/b"), /没有配置数据库名/);
+});
 
 test("a typed database address is used before a saved one", () => {
   assert.deepEqual(connectionFromFormValues({
@@ -52,14 +100,12 @@ test("brand ids keep one copy and paging can search", () => {
 
 test("push progress counts orders that already have a conversation", () => {
   const id = `push-progress-test-${process.pid}`;
-  const path = join(homedir(), ".regenic", "crm-push", `${id}.progress.json`);
   const dir = mkdtempSync(join(tmpdir(), "crm-push-"));
-  const dbPath = join(dir, "regenic.db");
-  const database = new DatabaseSync(dbPath);
-  database.exec("CREATE TABLE thread_heads (thread_id TEXT)");
-  database.prepare("INSERT INTO thread_heads (thread_id) VALUES (?)").run(`${SOURCE}:a`);
-  database.close();
-  mkdirSync(join(path, ".."), { recursive: true });
+  setPushStateDir(dir);
+  resetPushState();
+  rememberPushedIds(SOURCE, ["a"]);
+  const path = join(dir, `${id}.progress.json`);
+  mkdirSync(dir, { recursive: true });
   writeFileSync(path, JSON.stringify({
     discoveredIds: ["a", "b", "c"],
     steadyIds: ["a", "b", "gone"],
@@ -67,9 +113,6 @@ test("push progress counts orders that already have a conversation", () => {
     messages: 12,
     updatedAt: "2026-11-12T00:00:00.000Z",
   }));
-  const previous = process.env.REGENIC_DATABASE;
-  process.env.REGENIC_DATABASE = dbPath;
-  resetPushState();
   try {
     const progress = readPushProgress(id, SOURCE);
     assert.equal(progress.discovered, 3);
@@ -78,13 +121,8 @@ test("push progress counts orders that already have a conversation", () => {
     assert.equal(progress.messages, 12);
     assert.equal(crmDeliverySyncDriver.readPushProgress(id).steady, 1);
   } finally {
-    if (previous === undefined) {
-      delete process.env.REGENIC_DATABASE;
-    } else {
-      process.env.REGENIC_DATABASE = previous;
-    }
     resetPushState();
-    rmSync(path, { force: true });
+    setPushStateDir();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -177,32 +215,27 @@ test("sync stays on after the first click until uninstall", () => {
 
 test("an armed installation is resumed after restart until its config changes", () => {
   const dir = mkdtempSync(join(tmpdir(), "crm-push-resume-"));
-  const databasePath = join(dir, "regenic.db");
+  setPushStateDir(dir);
   const id = `push-resume-${process.pid}`;
-  const database = new DatabaseSync(databasePath);
-  database.exec(`CREATE TABLE connector_installations (
-    id TEXT PRIMARY KEY,
-    org_id TEXT,
-    connector_type TEXT,
-    status TEXT,
-    config_json TEXT,
-    created_at TEXT,
-    updated_at TEXT
-  )`);
-  const insert = database.prepare(`INSERT INTO connector_installations
-    (id, org_id, connector_type, status, config_json, created_at, updated_at)
-    VALUES (?, 'local-owner', 'crm-delivery-sync', 'enabled', ?, '2026-11-13T00:00:00.000Z', ?)`);
-  const config = JSON.stringify({ mongo_uri: "mongodb://localhost:27017/crm", mongo_db: "crm", brand_ids: ["b1"] });
-  insert.run(id, config, "v1");
-  database.close();
+  const config = { mongo_uri: "mongodb://localhost:27017/crm", mongo_db: "crm", brand_ids: ["b1"] };
+  const installation = {
+    id,
+    org_id: "local-owner",
+    connector_type: "crm-delivery-sync",
+    status: "enabled",
+    config,
+    created_at: "2026-11-13T00:00:00.000Z",
+    updated_at: "v1",
+  };
+  rememberInstallation(installation);
   clearPushArmed(id);
   const calls = [];
   const starters = [{
     connectorType: "crm-delivery-sync",
-    start(installation) {
-      calls.push(installation.updated_at);
+    start(item) {
+      calls.push(item.updated_at);
       startDeliveryPush({
-        installation,
+        installation: item,
         intervalMs: 60_000,
         concurrency: 1,
         pageSize: 1,
@@ -213,24 +246,25 @@ test("an armed installation is resumed after restart until its config changes", 
       });
     },
   }];
-  const env = { REGENIC_DATABASE: databasePath };
-  resumeArmedPush(starters, env);
-  assert.deepEqual(calls, []);
-  markPushArmed(id);
-  resumeArmedPush(starters, env);
-  assert.deepEqual(calls, ["v1"]);
-  resumeArmedPush(starters, env);
-  assert.deepEqual(calls, ["v1"]);
-  const again = new DatabaseSync(databasePath);
-  again.prepare("UPDATE connector_installations SET updated_at = ? WHERE id = ?").run("v2", id);
-  again.close();
-  resumeArmedPush(starters, env);
-  assert.deepEqual(calls, ["v1", "v2"]);
-  assert.equal(isPushRunning(id), true);
-  stopPush(id);
-  clearPushArmed(id);
-  resetPushState();
-  rmSync(dir, { recursive: true, force: true });
+  try {
+    resumeArmedPush(starters);
+    assert.deepEqual(calls, []);
+    markPushArmed(id);
+    resumeArmedPush(starters);
+    assert.deepEqual(calls, ["v1"]);
+    resumeArmedPush(starters);
+    assert.deepEqual(calls, ["v1"]);
+    rememberInstallation({ ...installation, updated_at: "v2" });
+    resumeArmedPush(starters);
+    assert.deepEqual(calls, ["v1", "v2"]);
+    assert.equal(isPushRunning(id), true);
+  } finally {
+    stopPush(id);
+    clearPushArmed(id);
+    resetPushState();
+    setPushStateDir();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("push webhook only accepts the token from this process", () => {
@@ -271,8 +305,8 @@ test("install rejects a bad Mongo URI and keeps the secret field for the host to
   assert.equal(config.mongo_uri, "mongodb://localhost:27017/crm");
   assert.equal(config.mongo_db, "crm");
   assert.equal(config.sync_concurrency, 2);
-  assert.equal(installConfig({ sync_concurrency: 100 }).sync_concurrency, 100);
-  assert.equal(installConfig({ sync_concurrency: 101 }).sync_concurrency, 100);
+  assert.equal(installConfig({ sync_concurrency: 4 }).sync_concurrency, 4);
+  assert.equal(installConfig({ sync_concurrency: 50 }).sync_concurrency, 4);
   assert.equal(config.selection, "all");
   assert.deepEqual(config.brand_ids, []);
   assert.equal(selectionOf({}), "all");

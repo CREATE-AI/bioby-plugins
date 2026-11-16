@@ -1,4 +1,14 @@
-import { MongoClient, ObjectId, type Db, type Document, type Filter } from "mongodb";
+import {
+  MongoClient,
+  ObjectId,
+  type Collection,
+  type Db,
+  type Document,
+  type Filter,
+  type FindCursor,
+  type FindOptions,
+} from "mongodb";
+import { decodeDocument } from "./stored-text";
 import type {
   DecisionDoc,
   DeliveryStore,
@@ -17,7 +27,7 @@ import type {
 const clients = new Map<string, Promise<MongoClient>>();
 
 export function mongoStore(uri: string, dbName: string): DeliveryStore {
-  const db = () => client(uri).then((mongo) => mongo.db(dbName));
+  const db = () => openConfiguredDb(uri, dbName);
   let brandKey = "";
   let brandProjectIds: string[] = [];
   async function scopeFor(database: Db, brandIds: string[] | undefined) {
@@ -132,7 +142,7 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
 }
 
 export function projectStore(uri: string, dbName: string): ProjectStore {
-  const db = () => client(uri).then((mongo) => mongo.db(dbName));
+  const db = () => openConfiguredDb(uri, dbName);
   return {
     async listProjects(limit, brandIds) {
       const filter: Record<string, unknown> = { isDeleted: false };
@@ -343,6 +353,44 @@ function pageOf<T>(items: T[], limit: number): IdPage<T> {
   return { items, full: items.length >= limit };
 }
 
+/** 只打开配置的那个库。连接串路径里的库名不相同的时候，只留作登录，不拿来查数据。 */
+export function pinDatabaseUri(uri: string, dbName: string): string {
+  const name = requireDbName(dbName);
+  const match = uri.match(/^(mongodb(?:\+srv)?:\/\/[^/?]*)(?:\/([^?]*))?(\?.*)?$/i);
+  if (!match) {
+    throw new Error("MongoDB 连接串不对");
+  }
+  const [, base, path = "", query = ""] = match;
+  const current = path ? decodeURIComponent(path) : "";
+  if (current === name) {
+    return uri;
+  }
+  const params = new URLSearchParams(query.startsWith("?") ? query.slice(1) : "");
+  if (!params.has("authSource")) {
+    params.set("authSource", current || "admin");
+  }
+  const suffix = params.toString();
+  return `${base}/${encodeURIComponent(name)}${suffix ? `?${suffix}` : ""}`;
+}
+
+async function openConfiguredDb(uri: string, dbName: string): Promise<Db> {
+  const name = requireDbName(dbName);
+  const mongo = await client(pinDatabaseUri(uri, name));
+  const database = mongo.db(name);
+  if (database.databaseName !== name) {
+    throw new Error("连接器只能使用配置的数据库");
+  }
+  return readingDb(database, name);
+}
+
+function requireDbName(dbName: string): string {
+  const name = dbName.trim();
+  if (!name || /[/?#\\\s\0]/.test(name)) {
+    throw new Error("没有配置数据库名");
+  }
+  return name;
+}
+
 async function client(uri: string): Promise<MongoClient> {
   const cached = clients.get(uri);
   if (cached) {
@@ -351,9 +399,6 @@ async function client(uri: string): Promise<MongoClient> {
   const opening = MongoClient.connect(uri, {
     serverSelectionTimeoutMS: 8_000,
     readPreference: "secondaryPreferred",
-    // 变更记录里偶尔夹着半个表情：只有 UTF-16 高位，低位没写进库。
-    // 严格按 UTF-8 会整张订单读失败。关掉校验后，这一处换成替换字符，其余文字照常读。
-    enableUtf8Validation: false,
   });
   clients.set(uri, opening);
   try {
@@ -362,6 +407,69 @@ async function client(uri: string): Promise<MongoClient> {
     clients.delete(uri);
     throw error;
   }
+}
+
+function readingDb(database: Db, name: string): Db {
+  return new Proxy(database, {
+    get(target, prop, receiver) {
+      if (prop === "client" || prop === "admin" || prop === "command") {
+        throw new Error("连接器只能使用配置的数据库");
+      }
+      if (prop === "databaseName") {
+        return name;
+      }
+      if (prop === "collection") {
+        return (collectionName: string, options?: Parameters<Db["collection"]>[1]) =>
+          readingCollection(target.collection(collectionName, options));
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+function readingCollection<T extends Document>(collection: Collection<T>): Collection<T> {
+  return new Proxy(collection, {
+    get(target, prop, receiver) {
+      if (prop === "find") {
+        return (filter?: Filter<T>, options?: FindOptions) =>
+          readingCursor(target.find(filter as Filter<T>, { ...options, raw: true }));
+      }
+      if (prop === "findOne") {
+        return async (filter?: Filter<T>, options?: FindOptions) => {
+          const raw = await target.findOne(filter as Filter<T>, { ...options, raw: true });
+          return raw == null ? null : decoded(raw);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+function readingCursor(cursor: FindCursor): FindCursor {
+  return new Proxy(cursor, {
+    get(target, prop, receiver) {
+      if (prop === "toArray") {
+        return async () => (await target.toArray()).map((row) => decoded(row));
+      }
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== "function") {
+        return value;
+      }
+      return (...args: unknown[]) => {
+        const result = value.apply(target, args);
+        return result === target ? receiver : result;
+      };
+    },
+  });
+}
+
+function decoded(value: unknown): unknown {
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return decodeDocument(value);
+  }
+  return value;
 }
 
 const CHOOSER_LIMIT = 5000;
@@ -442,7 +550,7 @@ export async function listBrandChoices(
   uri: string,
   dbName: string,
 ): Promise<Array<{ value: string; label: { literal: string } }>> {
-  const database = (await client(uri)).db(dbName);
+  const database = await openConfiguredDb(uri, dbName);
   const rows = await database
     .collection("brands")
     .find(loose({ isDeleted: { $ne: true } }))

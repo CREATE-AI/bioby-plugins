@@ -1,8 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pushStateDir, pushStatePath, setPushStateDir } from "./push-paths";
+
+export { setPushStateDir };
 import {
   ChannelDriverError,
   INGEST_SCHEMA_VERSION,
@@ -32,6 +33,7 @@ interface PushSnapshot {
   running: boolean;
   messages: number;
   updatedAt: string;
+  source?: string;
 }
 
 export interface PushProgress {
@@ -88,7 +90,7 @@ export function clearPushArmed(installationId: string): void {
 }
 
 function armedPath(installationId: string): string {
-  return join(homedir(), ".regenic", "crm-push", `${installationId}.armed`);
+  return pushStatePath(`${installationId}.armed`);
 }
 
 export function readPushProgress(installationId: string, source?: string): PushProgress | null {
@@ -134,32 +136,69 @@ function notePushList(installationId: string, ids: string[], source: string): vo
     running: true,
     messages: 0,
     updatedAt: new Date().toISOString(),
+    source,
   });
 }
 
+/** 记下已经写进会话的订单。本机文件为准，不再去读内核的 thread_heads。 */
+export function rememberPushedIds(source: string, ids: readonly string[]): void {
+  const current = pushedIds(source);
+  let changed = false;
+  for (const id of ids) {
+    if (id && !current.has(id)) {
+      current.add(id);
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return;
+  }
+  writeIdFile(pushedPath(source), [...current]);
+}
+
 function pushedIds(source: string): Set<string> {
-  const path = process.env.REGENIC_DATABASE?.trim();
-  if (!path) {
-    return new Set();
+  const cached = threadCache.get(source);
+  if (cached) {
+    return cached;
   }
-  const prefix = `${source}:`;
-  let database: DatabaseSync | undefined;
+  const stored = readIdFile(pushedPath(source));
+  const ids = stored ?? seedPushedIds(source);
+  if (!stored) {
+    writeIdFile(pushedPath(source), [...ids]);
+  }
+  threadCache.set(source, ids);
+  return ids;
+}
+
+/** 升级前进度里的 steadyIds 就是当时已经有会话的订单。第一次接着用，避免整表重推。 */
+function seedPushedIds(source: string): Set<string> {
+  const ids = new Set<string>();
+  let names: string[] = [];
   try {
-    database = new DatabaseSync(path, { readOnly: true, timeout: 1_000, enableForeignKeyConstraints: false });
-    const rows = database.prepare(
-      "SELECT thread_id FROM thread_heads WHERE thread_id LIKE ?",
-    ).all(`${prefix}%`) as Array<{ thread_id?: string }>;
-    const ids = new Set(rows.flatMap((row) => {
-      const id = row.thread_id?.startsWith(prefix) ? row.thread_id.slice(prefix.length) : "";
-      return id ? [id] : [];
-    }));
-    threadCache.set(source, ids);
-    return ids;
+    names = readdirSync(pushStateDir());
   } catch {
-    return threadCache.get(source) ?? new Set();
-  } finally {
-    database?.close();
+    return ids;
   }
+  for (const name of names) {
+    if (!name.endsWith(".progress.json")) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(readFileSync(join(pushStateDir(), name), "utf8")) as {
+        steadyIds?: unknown;
+        source?: unknown;
+      };
+      if (typeof parsed.source === "string" && parsed.source !== source) {
+        continue;
+      }
+      for (const id of stringList(parsed.steadyIds)) {
+        ids.add(id);
+      }
+    } catch {
+      // 一份坏的进度文件不影响其它安装。
+    }
+  }
+  return ids;
 }
 
 function notePushMessages(installationId: string, count: number): void {
@@ -202,6 +241,7 @@ function loadProgress(installationId: string): PushSnapshot {
       running: parsed.running === true,
       messages: typeof parsed.messages === "number" && parsed.messages > 0 ? parsed.messages : 0,
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+      source: typeof parsed.source === "string" ? parsed.source : undefined,
     };
     progressMemory.set(installationId, snapshot);
     return snapshot;
@@ -220,7 +260,7 @@ function saveProgress(installationId: string, snapshot: PushSnapshot): void {
 }
 
 function progressPath(installationId: string): string {
-  return join(homedir(), ".regenic", "crm-push", `${installationId}.progress.json`);
+  return pushStatePath(`${installationId}.progress.json`);
 }
 
 function stringList(value: unknown): string[] {
@@ -293,6 +333,8 @@ export function startDeliveryPush(input: {
       await pushPages({
         installation: input.installation,
         signal,
+        source: SOURCE,
+        pushedId: row.id,
         cursorKey: deliveryCursorKey(input.installation.id, row.id),
         parse: parseOrderCursor,
         advance: async (cursor) => {
@@ -334,6 +376,8 @@ export function startProjectPush(input: {
       await pushPages({
         installation: input.installation,
         signal,
+        source: PROJECT_SOURCE,
+        pushedId: row.id,
         cursorKey: key,
         parse: parseProjectCursor,
         advance: async (cursor) => {
@@ -427,6 +471,8 @@ function startLoop(input: {
 async function pushPages<T>(input: {
   installation: ConnectorInstallation;
   signal: AbortSignal;
+  source: string;
+  pushedId: string;
   cursorKey: string;
   parse: (raw: string | undefined) => T;
   advance: (cursor: T) => Promise<{ records: IngestRecord[]; cursor: T; hasMore: boolean }>;
@@ -439,6 +485,7 @@ async function pushPages<T>(input: {
       if (!posted) {
         return;
       }
+      rememberPushedIds(input.source, [input.pushedId]);
     }
     const next = JSON.stringify(advanced.cursor);
     rememberDeliveryCursor(input.cursorKey, next);
@@ -638,7 +685,28 @@ function sleep(ms: number, signal: AbortSignal, installationId: string): Promise
 }
 
 function seenPath(installationId: string): string {
-  return join(homedir(), ".regenic", "crm-push", `${installationId}.json`);
+  return pushStatePath(`${installationId}.json`);
+}
+
+function pushedPath(source: string): string {
+  return pushStatePath(`pushed-${source.replace(/[^a-z0-9_-]/gi, "_")}.json`);
+}
+
+function readIdFile(path: string): Set<string> | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string" && id.length > 0) : []);
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    return code === "ENOENT" ? undefined : new Set();
+  }
+}
+
+function writeIdFile(path: string, ids: string[]): void {
+  mkdirSync(join(path, ".."), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(ids));
+  renameSync(tmp, path);
 }
 
 function loadSeen(installationId: string): Set<string> {

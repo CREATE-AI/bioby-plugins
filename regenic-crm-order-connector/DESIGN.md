@@ -168,7 +168,7 @@ GitHub Actions 里，一次运行是一条时间线。每一步有固定名字�
 1. **目录**用 `bindSyncSource` 的 `listDirectory`。不要做一条 key 叫 `catalog` 的流，也不要在 `resolveStreams` 里读游标或放行订单。`resolveStreams` 返回空列表。
 2. **某一张订单**用 `resolveThreadStream`。内核用目录里的 `stream_key` 还原会话再来拉。`stream_key` 和 `thread_id` 都写成 `crm-delivery:<订单id>`。写成 `delivery:<订单id>` 时，内核还原不出会话，这张单不会被拉。
 
-`listDirectory` 每一页最多交 `sync_concurrency` 张订单（默认 4）。每张带 `stream_key`、`thread_id`。`label` 能取到就用「昵称 · 项目名」，取不到先用订单 id。本轮 `_id` 还没翻完，或本轮要交的 id 还没交完：`complete` 为 false，`next_cursor` 记下翻页位置和本轮已经见过的 id。不要设 `replaces`。设了的话，内核会把这一页当成整个目录，还没翻到的订单会被丢掉。
+`listDirectory` 每一页最多交 `sync_concurrency` 张订单（默认 4，最多 4）。每张带 `stream_key`、`thread_id`。`label` 能取到就用「昵称 · 项目名」，取不到先用订单 id。本轮 `_id` 还没翻完，或本轮要交的 id 还没交完：`complete` 为 false，`next_cursor` 记下翻页位置和本轮已经见过的 id。不要设 `replaces`。设了的话，内核会把这一页当成整个目录，还没翻到的订单会被丢掉。
 
 本轮第一页也要 `complete: false`，哪怕交付视图里的订单不超过一页。这样内核才会把这一轮当成新的一轮。最后一页才 `complete: true`，只补上还没交过的、仍在交付视图里的订单。已经离开视图、或这一轮没再出现的 id，不要放进这一轮的任何一页。它们留在上一轮的目录里，拉取还在。结束步骤写完之前不要发这页收尾。拉取写完后在进程里标一下，再发 `complete: true`。进程重启后这个标记是空的：先至少等一个订单拉取间隔（大约 2 分钟），让还留在目录里的订单被拉到一次（离开视图的会在那次写上结束步骤，编号相同，不会多一条），再收尾。收尾之后内核把少了的订单从目录拿掉，并清掉这张单的拉取游标；会话里已经写下的历史还在。
 
@@ -243,7 +243,7 @@ GitHub Actions 里，一次运行是一条时间线。每一步有固定名字�
 | `mongo_uri` | 普通配置 | 无 | MongoDB 连接串 |
 | `mongo_db` | 普通配置 | 连接串里的库名 | 库名 |
 | `refresh_interval_ms` | 普通配置 | `180000` | 同一张订单两次检查的间隔 |
-| `sync_concurrency` | 普通配置 | `4` | `listDirectory` 每一页最多交几张订单。表单和运行时都夹在 1 到 100 |
+| `sync_concurrency` | 普通配置 | `4` | 同时往外推的订单数。表单和运行时都夹在 1 到 4 |
 | `selection` | 普通配置 | 没填时按 `all` | `pick` 自己选，`recent` 按提报时间取最新，`all` 交付视图里的全部订单 |
 | `order_ids` | 普通配置 | 无 | `selection` 为 `pick` 时要同步的订单 id。表单里按达人昵称、项目名称、达人链接搜 |
 | `recent_limit` | 普通配置 | `30` | `selection` 为 `recent` 时取多少张。只含交付视图里的，按 `submitWorkflow.submitTime` 从新到旧，最多 200 |
