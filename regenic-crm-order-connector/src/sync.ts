@@ -3,6 +3,7 @@ import { isEndedStatus, statusLabel } from "./status";
 import { customerScriptFromAsk, customerScriptFromScene } from "./sentences";
 import { stepRecord, type StepDraft } from "./records";
 import { latestMailText } from "./mail-text";
+import { formatReviewChange } from "./review-log";
 import { compactTime, shortHash, stepToken, withOffsets } from "./time";
 import { projectThreadId } from "./locators";
 import {
@@ -45,7 +46,15 @@ export interface OrderCursor {
   /** 邮件正文去掉历史引用后，已同步过的旧邮件要再读一遍。 */
   mailText?: number;
   decisionRewind?: "started" | "done";
+  /** 变更记录改成可读的 AI 内审之后，旧记录要再读一遍。 */
+  logRewind?: "started" | "done";
+  logText?: number;
+  /** 已结束的会话已经移到不显示。人再拖回来就不再移。 */
+  folded?: boolean;
 }
+
+/** 变更记录的写法版本。旧游标低于这个数时，会把 AI 内审再写一遍。 */
+export const DELIVERY_LOG_TEXT_VERSION = 1;
 
 export function emptyOrderCursor(): OrderCursor {
   return {
@@ -116,8 +125,15 @@ export async function advanceDelivery(input: {
     return finishClosed(input.orderId, input.order, input.project, cursor, input.now);
   }
   const order = input.order;
-  if (isEndedStatus(order.status) && cursor.ended && cursor.status === order.status) {
-    return { records: [], cursor, hasMore: false, wroteEnd: true };
+  if (
+    isEndedStatus(order.status) &&
+    cursor.ended &&
+    cursor.status === order.status &&
+    (cursor.logText ?? 0) >= DELIVERY_LOG_TEXT_VERSION
+  ) {
+    const records: IngestRecord[] = [];
+    dropEndNote(order, input.project, cursor, records, input.now);
+    return { records, cursor, hasMore: false, wroteEnd: true };
   }
   if (cursor.ended && !isEndedStatus(order.status)) {
     cursor.ended = false;
@@ -150,10 +166,18 @@ export async function advanceDelivery(input: {
   while (records.length < input.pageSize && guard < 8) {
     guard += 1;
     if (cursor.stage === "live") {
-      if (isEndedStatus(order.status)) {
+      if (isEndedStatus(order.status) && (cursor.logText ?? 0) >= DELIVERY_LOG_TEXT_VERSION) {
         finishEnded(order, input.project, cursor, records, input.now);
         wroteEnd = true;
         hasMore = false;
+        break;
+      }
+      if (isEndedStatus(order.status)) {
+        hasMore = await pullLogs(input, cursor, label, records, input.pageSize - records.length, false);
+        if (!hasMore) {
+          finishEnded(order, input.project, cursor, records, input.now);
+          wroteEnd = true;
+        }
         break;
       }
       hasMore = await pullLive(input, cursor, label, records);
@@ -289,11 +313,23 @@ async function pullLogs(
   budget: number,
   live: boolean,
 ): Promise<boolean> {
+  if (budget <= 0) {
+    return true;
+  }
+  if ((cursor.logText ?? 0) < DELIVERY_LOG_TEXT_VERSION && cursor.logRewind !== "started") {
+    cursor.logAfter = null;
+    cursor.logRewind = "started";
+  }
+  const rewriting = (cursor.logText ?? 0) < DELIVERY_LOG_TEXT_VERSION;
   const page = await input.store.listLogs(
     input.order!.id,
-    { afterId: cursor.logAfter, since: live ? cursor.watermark : null },
+    { afterId: cursor.logAfter, since: rewriting || !live ? null : cursor.watermark },
     budget,
   );
+  if (!page.full) {
+    cursor.logRewind = "done";
+    cursor.logText = DELIVERY_LOG_TEXT_VERSION;
+  }
   if (page.items.some(logChangesStatus)) {
     cursor.sawStatusLog = true;
     cursor.status = input.order!.status;
@@ -372,19 +408,32 @@ function finishEnded(
   records: IngestRecord[],
   now: string,
 ): void {
-  const at = order.updatedTime || now;
-  const labelText = statusLabel(order.status);
-  emit(order, conversationLabel(order, project), cursor, records, [{
-    suffix: "end-done",
-    at,
-    kind: "end",
-    actor: "assistant",
-    speaker: "系统",
-    text: `会话状态：done\n交付状态：${labelText}\n这个会话已结束，不再更新。`,
-  }]);
+  dropEndNote(order, project, cursor, records, now);
   cursor.ended = true;
   cursor.stage = "live";
   cursor.status = order.status;
+}
+
+/** 以前写过的结束句删掉。交付状态那条还在，这句是重复的。 */
+function dropEndNote(
+  order: OrderDoc,
+  project: ProjectDoc | null,
+  cursor: OrderCursor,
+  records: IngestRecord[],
+  now: string,
+): void {
+  if (!cursor.fp["end-done"]) {
+    return;
+  }
+  emit(order, conversationLabel(order, project), cursor, records, [{
+    suffix: "end-done",
+    at: order.updatedTime || now,
+    kind: "end",
+    actor: "assistant",
+    speaker: "系统",
+    text: "",
+    tombstone: true,
+  }]);
 }
 
 function emit(
@@ -904,10 +953,7 @@ function followResultLabel(value: string | undefined): string {
 function logStep(log: LogDoc): StepDraft {
   const lines = [
     log.reason?.trim() ?? "",
-    ...log.changes.map((change) => {
-      const name = fieldLabel(change.fieldName);
-      return `${name}：${showChange(change.fieldName, change.oldValue)} → ${showChange(change.fieldName, change.newValue)}`;
-    }),
+    ...log.changes.map((change) => formatReviewChange(change) ?? changeLine(change)),
   ].filter(Boolean);
   return {
     suffix: `log-${stepToken(log.id)}`,
@@ -917,6 +963,11 @@ function logStep(log: LogDoc): StepDraft {
     speaker: log.operatorName?.trim() || "变更",
     text: lines.join("\n") || "有一条变更",
   };
+}
+
+function changeLine(change: { fieldName?: string; oldValue?: string; newValue?: string }): string {
+  const name = fieldLabel(change.fieldName);
+  return `${name}：${showChange(change.fieldName, change.oldValue)} → ${showChange(change.fieldName, change.newValue)}`;
 }
 
 function fieldLabel(name: string | undefined): string {

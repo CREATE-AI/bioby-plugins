@@ -19,7 +19,8 @@ import { PROJECT_SOURCE, SOURCE } from "./locators";
 import type { DeliveryStore, OrderDoc, ProjectDoc, ProjectInfoDoc, ProjectStore } from "./model";
 import { advanceProject, parseProjectCursor } from "./project-sync";
 import { isEndedStatus } from "./status";
-import { advanceDelivery, parseOrderCursor } from "./sync";
+import { advanceDelivery, DELIVERY_LOG_TEXT_VERSION, parseOrderCursor } from "./sync";
+import { settleEndedThread } from "./thread-fold";
 
 const runs = new Map<string, AbortController>();
 const tokens = new Map<string, string>();
@@ -350,6 +351,10 @@ export function startDeliveryPush(input: {
           });
         },
       });
+      await settleEndedThread(input.installation.id, row.id, row.status);
+    },
+    onSkip: async (row) => {
+      await settleEndedThread(input.installation.id, row.id, row.status);
     },
   });
 }
@@ -420,6 +425,7 @@ function startLoop(input: {
   source: string;
   list: () => Promise<Array<{ id: string; status?: string }>>;
   skip?: (row: { id: string; status?: string }) => boolean;
+  onSkip?: (row: { id: string; status?: string }) => Promise<void>;
   pushOne: (row: { id: string; status?: string }, signal: AbortSignal) => Promise<void>;
 }): void {
   if (runs.has(input.installation.id)) {
@@ -439,6 +445,7 @@ function startLoop(input: {
         const seen = loadSeen(installationId);
         const gone = [...seen].filter((id) => !current.has(id)).map((id) => ({ id }));
         const kept = new Set(current);
+        const skipped = input.onSkip ? heads.filter((row) => input.skip?.(row) === true) : [];
         const active = heads.filter((row) => !input.skip?.(row));
         const lanes = splitPushLanes(active, pushedIds(input.source));
         await runPushQueues({
@@ -458,6 +465,22 @@ function startLoop(input: {
             }
           },
         });
+        if (input.onSkip && skipped.length > 0) {
+          await runPushQueues({
+            fresh: skipped,
+            recheck: [],
+            gone: [],
+            concurrency: input.concurrency,
+            signal: abort.signal,
+            run: async (row) => {
+              try {
+                await input.onSkip?.(row);
+              } catch (error) {
+                logPush(installationId, row.id, error);
+              }
+            },
+          });
+        }
         saveSeen(installationId, [...kept]);
       } catch (error) {
         logPush(installationId, "", error);
@@ -501,7 +524,10 @@ function skipEndedOrder(installationId: string, orderId: string, status: string 
     return false;
   }
   const cursor = parseOrderCursor(selectStoredCursor(deliveryCursorKey(installationId, orderId), undefined));
-  return cursor.ended === true && cursor.status === status;
+  return cursor.ended === true
+    && cursor.status === status
+    && (cursor.logText ?? 0) >= DELIVERY_LOG_TEXT_VERSION
+    && !cursor.fp["end-done"];
 }
 
 async function postBatch(

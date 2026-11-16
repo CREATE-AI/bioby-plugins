@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = require("node:fs");
-const { tmpdir } = require("node:os");
+const { homedir, tmpdir } = require("node:os");
 const { join } = require("node:path");
 const test = require("node:test");
 const { conversationId } = require("@regenic/domain");
@@ -24,6 +24,9 @@ const {
 } = require("../dist/driver");
 const { rememberFurtherHistory } = require("../dist/cursor-store");
 const { advanceDelivery, emptyOrderCursor, parseOrderCursor } = require("../dist/sync");
+const { formatReviewChange } = require("../dist/review-log");
+const { deliveryCursorKey } = require("../dist/cursor-store");
+const { settleEndedThread, setThreadFoldClient } = require("../dist/thread-fold");
 const { isEndedStatus } = require("../dist/status");
 const { influencerMailScope, pinDatabaseUri } = require("../dist/mongo-store");
 const { decodeDocument, decodeStoredText } = require("../dist/stored-text");
@@ -213,7 +216,7 @@ test("sync stays on after the first click until uninstall", () => {
   assert.equal(pushArmed(id), false);
 });
 
-test("an armed installation is resumed after restart until its config changes", () => {
+test("an enabled installation with a Mongo URI starts pushing without a prior sync click", () => {
   const dir = mkdtempSync(join(tmpdir(), "crm-push-resume-"));
   setPushStateDir(dir);
   const id = `push-resume-${process.pid}`;
@@ -248,16 +251,25 @@ test("an armed installation is resumed after restart until its config changes", 
   }];
   try {
     resumeArmedPush(starters);
-    assert.deepEqual(calls, []);
-    markPushArmed(id);
-    resumeArmedPush(starters);
     assert.deepEqual(calls, ["v1"]);
+    assert.equal(pushArmed(id), false);
     resumeArmedPush(starters);
     assert.deepEqual(calls, ["v1"]);
     rememberInstallation({ ...installation, updated_at: "v2" });
     resumeArmedPush(starters);
     assert.deepEqual(calls, ["v1", "v2"]);
-    assert.equal(isPushRunning(id), true);
+    rememberInstallation({ ...installation, status: "disabled", updated_at: "v3" });
+    resumeArmedPush(starters);
+    assert.equal(isPushRunning(id), false);
+    rememberInstallation({
+      ...installation,
+      status: "enabled",
+      config: { ...config, mongo_uri: "" },
+      updated_at: "v4",
+    });
+    resumeArmedPush(starters);
+    assert.equal(isPushRunning(id), false);
+    assert.deepEqual(calls, ["v1", "v2"]);
   } finally {
     stopPush(id);
     clearPushArmed(id);
@@ -504,10 +516,7 @@ test("an ended order still in the delivery view is marked done and then stays qu
   assert.equal(isEndedStatus("CUSTOMER_HOLD"), false);
 
   const advanced = await advanceUntilSettled(order({ status: "ABANDONED", inDeliveryView: true }));
-  const done = advanced.records.find((record) => String(record.external_id).endsWith(":end-done"));
-  assert.ok(done);
-  assert.match(recordText(done), /会话状态：done/);
-  assert.match(recordText(done), /交付状态：已放弃/);
+  assert.equal(advanced.records.some((record) => String(record.external_id).endsWith(":end-done")), false);
   assert.equal(advanced.cursor.ended, true);
   assert.equal(advanced.wroteEnd, true);
   assert.equal(advanced.hasMore, false);
@@ -536,6 +545,42 @@ test("an ended order still in the delivery view is marked done and then stays qu
   });
   assert.equal(reopened.cursor.ended, false);
   assert.equal(reopened.records.some((record) => String(record.external_id).endsWith(":end-done")), false);
+});
+
+test("an old end sentence is removed once", async () => {
+  const cursor = parseOrderCursor(JSON.stringify({
+    ...emptyOrderCursor(),
+    stage: "live",
+    ended: true,
+    status: "ABANDONED",
+    face: 4,
+    seq: 2,
+    logText: 1,
+    fp: { "end-done": "old" },
+  }));
+  const first = await advanceDelivery({
+    orderId: "a",
+    order: order({ status: "ABANDONED", inDeliveryView: true }),
+    project: null,
+    store: emptyStore(),
+    cursor,
+    pageSize: 20,
+    now: "2026-11-06T10:00:00.000Z",
+  });
+  const removed = first.records.find((record) => record.external_id === "a:end-done");
+  assert.equal(removed?.operation, "tombstone");
+  assert.equal(first.cursor.fp["end-done"], undefined);
+
+  const second = await advanceDelivery({
+    orderId: "a",
+    order: order({ status: "ABANDONED", inDeliveryView: true }),
+    project: null,
+    store: emptyStore(),
+    cursor: first.cursor,
+    pageSize: 20,
+    now: "2026-11-06T11:00:00.000Z",
+  });
+  assert.equal(second.records.length, 0);
 });
 
 test("status log is kept and a second status step is not added", async () => {
@@ -1059,6 +1104,184 @@ async function advanceUntilSettled(row) {
   }
   return last;
 }
+
+test("an AI review change log is written as result, score, request, and response", async () => {
+  const fit = formatReviewChange({
+    fieldName: "influencerFitAutoInternalReview",
+    newValue: JSON.stringify({
+      decision: "REJECTED",
+      reviewComment: "报价偏高",
+      token: "secret-token",
+      userMessage: JSON.stringify({
+        clientRequirement: "要美妆",
+        influencerInfo: {
+          platform: "小红书",
+          nickname: "甲",
+          email: "hidden@example.com",
+          follower: 1000,
+          externalQuote: 80,
+          currency: "USD",
+          inputUrl: "https://example/video",
+        },
+      }),
+      agentResponse: JSON.stringify({
+        confidence: 0.82,
+        summary: "不匹配",
+        recommendation: "换人",
+        evaluations: [{
+          overallScore: 41,
+          dimensionScores: { price: { analysis: "报价高于预算" } },
+        }],
+      }),
+    }),
+  });
+  assert.match(fit, /结果：不通过/);
+  assert.match(fit, /评分：41/);
+  assert.match(fit, /置信度：0.82/);
+  assert.match(fit, /请求/);
+  assert.match(fit, /项目需求：要美妆/);
+  assert.match(fit, /返回/);
+  assert.match(fit, /价格：报价高于预算/);
+  assert.equal(fit.includes("hidden@example.com"), false);
+  assert.equal(fit.includes("secret-token"), false);
+
+  const orderReview = formatReviewChange({
+    fieldName: "regenicOrderInternalReview",
+    newValue: JSON.stringify({
+      reviewResult: "REJECTED",
+      reviewComment: "脚本不符合",
+      previousStatus: "FOLLOWING",
+      token: "secret-token",
+      reportingOperationsUserId: "user-1",
+    }),
+  });
+  assert.match(orderReview, /结果：不通过/);
+  assert.match(orderReview, /之前状态：跟进中/);
+  assert.match(orderReview, /说明：脚本不符合/);
+  assert.equal(orderReview.includes("评分"), false);
+  assert.equal(orderReview.includes("secret-token"), false);
+  assert.equal(orderReview.includes("user-1"), false);
+
+  const synced = await runUntilLive(
+    order({ status: "BARGAINING" }),
+    project(),
+    emptyStore({
+      logs: [{
+        id: "log1",
+        logTime: "2026-11-06T09:00:00.000Z",
+        operatorName: "内审",
+        changes: [{
+          fieldName: "influencerFitAutoInternalReview",
+          newValue: JSON.stringify({
+            decision: "APPROVED",
+            agentResponse: JSON.stringify({
+              evaluations: [{ overallScore: 88 }],
+            }),
+          }),
+        }],
+      }],
+    }),
+  );
+  const written = synced.records.find((record) => record.external_id === "a:log-log1");
+  assert.ok(written);
+  assert.match(recordText(written), /结果：通过/);
+  assert.match(recordText(written), /评分：88/);
+});
+
+test("an ended order rewrites an old AI review once", async () => {
+  const store = emptyStore({
+    logs: [{
+      id: "log1",
+      logTime: "2026-11-06T09:00:00.000Z",
+      operatorName: "内审",
+      changes: [{
+        fieldName: "influencerFitAutoInternalReview",
+        newValue: JSON.stringify({
+          decision: "REJECTED",
+          agentResponse: JSON.stringify({
+            evaluations: [{ overallScore: 41 }],
+          }),
+        }),
+      }],
+    }],
+  });
+  const cursor = parseOrderCursor(JSON.stringify({
+    ...emptyOrderCursor(),
+    stage: "live",
+    ended: true,
+    status: "ABANDONED",
+    face: 4,
+    seq: 3,
+    fp: { "log-log1": "old" },
+  }));
+  const first = await advanceDelivery({
+    orderId: "a",
+    order: order({ status: "ABANDONED", inDeliveryView: true }),
+    project: null,
+    store,
+    cursor,
+    pageSize: 20,
+    now: "2026-11-06T10:00:00.000Z",
+  });
+  const rewritten = first.records.find((record) => record.external_id === "a:log-log1");
+  assert.equal(rewritten?.operation, "revise");
+  assert.match(recordText(rewritten), /评分：41/);
+  assert.equal(first.cursor.logText, 1);
+
+  const second = await advanceDelivery({
+    orderId: "a",
+    order: order({ status: "ABANDONED", inDeliveryView: true }),
+    project: null,
+    store,
+    cursor: first.cursor,
+    pageSize: 20,
+    now: "2026-11-06T11:00:00.000Z",
+  });
+  assert.equal(second.records.length, 0);
+});
+
+test("an ended delivery thread is hidden once and shown again when it reopens", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "crm-fold-"));
+  setDeliveryCursorDir(dir);
+  resetDeliveryCursorMemory();
+  const key = deliveryCursorKey("fold-install", "order-1");
+  rememberDeliveryCursor(key, JSON.stringify({
+    ...emptyOrderCursor(),
+    stage: "live",
+    ended: true,
+    status: "ABANDONED",
+    seq: 4,
+    logText: 1,
+  }));
+  const writes = [];
+  setThreadFoldClient({
+    async read() {
+      return { found: true, hidden: writes.at(-1)?.hidden === true, version: writes.length };
+    },
+    async write(_threadId, hidden, version) {
+      writes.push({ hidden, version });
+      return "ok";
+    },
+  });
+  try {
+    await settleEndedThread("fold-install", "order-1", "ABANDONED");
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].hidden, true);
+    assert.equal(parseOrderCursor(selectStoredCursor(key, undefined)).folded, true);
+    await settleEndedThread("fold-install", "order-1", "ABANDONED");
+    assert.equal(writes.length, 1);
+
+    await settleEndedThread("fold-install", "order-1", "FOLLOWING");
+    assert.equal(writes.length, 2);
+    assert.equal(writes[1].hidden, false);
+    assert.equal(parseOrderCursor(selectStoredCursor(key, undefined)).folded, false);
+  } finally {
+    setThreadFoldClient();
+    resetDeliveryCursorMemory();
+    setDeliveryCursorDir(join(homedir(), ".regenic", "crm-delivery-cursors"));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 function order(extra = {}) {
   return {

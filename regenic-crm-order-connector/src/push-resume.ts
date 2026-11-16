@@ -4,7 +4,7 @@ import {
   listRememberedInstallations,
   refreshInstallationsFromKernel,
 } from "./installation-snapshot";
-import { isPushRunning, pushArmed, stopPush } from "./push";
+import { isPushRunning, stopPush } from "./push";
 
 const RESUME_DELAY_MS = 8_000;
 const RESUME_INTERVAL_MS = 20_000;
@@ -70,7 +70,7 @@ export function resumeArmedPush(
       continue;
     }
     const running = isPushRunning(installation.id);
-    if (installation.status !== "enabled" || !pushArmed(installation.id) || !configHasUri(installation.config)) {
+    if (installation.status !== "enabled" || !configHasUri(installation.config)) {
       if (running) {
         stopPush(installation.id);
       }
