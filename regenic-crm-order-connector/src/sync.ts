@@ -1020,6 +1020,12 @@ function contextText(order: OrderDoc, project: ProjectDoc | null): string {
     `结算方式：${settlementLabel(order.settlementMethod)}`,
     `交付状态：${statusLabel(order.status)}`,
   ];
+  if (order.deliveryOwner?.trim()) {
+    lines.push(`交付跟进人：${order.deliveryOwner.trim()}`);
+  }
+  if (order.publishTime?.trim()) {
+    lines.push(`发布时间：${order.publishTime.trim()}`);
+  }
   if (order.projectId) {
     lines.push(`项目 ID：${order.projectId}`, `项目会话：${projectThreadId(order.projectId)}`);
   }
@@ -1047,6 +1053,8 @@ function contextFingerprint(order: OrderDoc, project: ProjectDoc | null): unknow
     script: scriptLinks(order),
     draft: draftLinks(order),
     publish: linkList(order.publishLinks),
+    owner: order.deliveryOwner ?? "",
+    published: order.publishTime ?? "",
   };
 }
 

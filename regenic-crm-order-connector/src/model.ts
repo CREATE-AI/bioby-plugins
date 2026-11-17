@@ -35,6 +35,10 @@ export interface OrderDoc {
   scriptLink?: string;
   /** selectedWorkflow.publishLinks，没有列表时用 publishLink。 */
   publishLinks?: string[];
+  /** deliveryOperationsUserName，没有时用 selectedWorkflow.currentFollowerName。 */
+  deliveryOwner?: string;
+  /** selectedWorkflow.publishTime。 */
+  publishTime?: string;
   isDeleted?: boolean;
   createdTime?: string;
   updatedTime?: string;

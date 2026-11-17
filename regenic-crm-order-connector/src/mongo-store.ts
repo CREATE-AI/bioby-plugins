@@ -589,6 +589,8 @@ function mapOrder(row: Document): OrderDoc {
     publishLinks: stringsOf(workflow?.publishLinks).length > 0
       ? stringsOf(workflow?.publishLinks)
       : stringsOf(workflow?.publishLink),
+    deliveryOwner: stringOf(row.deliveryOperationsUserName) ?? stringOf(workflow?.currentFollowerName),
+    publishTime: iso(workflow?.publishTime),
     isDeleted: row.isDeleted === true,
     createdTime: iso(row.createdTime),
     updatedTime: iso(row.updatedTime),

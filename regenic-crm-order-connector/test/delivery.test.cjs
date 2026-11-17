@@ -765,6 +765,8 @@ test("stored system steps are rewritten with a readable speaker", async () => {
   assert.equal(recordSpeaker(context), "订单");
   assert.match(recordText(context), /小明/);
   assert.match(recordText(context), /结算方式：未记录/);
+  assert.doesNotMatch(recordText(context), /交付跟进人：/);
+  assert.doesNotMatch(recordText(context), /发布时间：/);
   assert.doesNotMatch(recordText(context), /合作权益：/);
   assert.doesNotMatch(recordText(context), /交付物：/);
   assert.doesNotMatch(recordText(context), /权益：权益/);

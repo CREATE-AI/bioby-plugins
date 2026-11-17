@@ -277,6 +277,8 @@ test("order context includes script, draft and publish links", async () => {
       inDeliveryView: true,
       scriptLink: "https://example.com/script",
       publishLinks: ["https://example.com/post"],
+      deliveryOwner: "周宁",
+      publishTime: "2026-11-08T02:00:00.000Z",
       createdTime: "2026-11-01T00:00:00.000Z",
       updatedTime: "2026-11-06T09:00:00.000Z",
       follows: [{
@@ -300,6 +302,8 @@ test("order context includes script, draft and publish links", async () => {
   assert.match(recordText(context), /脚本链接：https:\/\/example.com\/script/);
   assert.match(recordText(context), /视频草稿链接：https:\/\/example.com\/draft/);
   assert.match(recordText(context), /发布链接：https:\/\/example.com\/post/);
+  assert.match(recordText(context), /交付跟进人：周宁/);
+  assert.match(recordText(context), /发布时间：2026-11-08T02:00:00.000Z/);
   const note = advanced.records.find((record) => record.external_id.includes(":note-"));
   assert.match(recordText(note), /附件：https:\/\/example.com\/draft/);
 });
