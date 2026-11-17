@@ -37,7 +37,7 @@ import {
 } from "./locators";
 import { brandIdsOf, pageChoices } from "./brands";
 import { listBrandChoices, listChooserHeads, mongoStore } from "./mongo-store";
-import { bindPushWebhook, clearPushArmed, kickPush, markPushArmed, pushArmed, readPushProgress, startDeliveryPush, stopPush } from "./push";
+import { bindPushWebhook, clearPushArmed, forgetPushHost, kickPush, markPushArmed, pushArmed, readPushProgress, rememberPushHost, startDeliveryPush, stopPush } from "./push";
 import type { DeliveryStore, OpenOrderHead } from "./model";
 import { advanceDelivery, parseOrderCursor } from "./sync";
 
@@ -73,11 +73,13 @@ export const crmDeliverySyncDriver: ChannelDriver = {
 
   async startInstallation(installation, host) {
     markPushArmed(installation.id);
+    rememberPushHost(installation.id, host);
     startDeliveryPush(deliveryPushInput(installation, () => openStore(installation, host)));
   },
 
   async stopInstallation(installation, _host, context) {
     stopPush(installation.id);
+    forgetPushHost(installation.id);
     if (context?.reason === "delete") {
       clearPushArmed(installation.id);
     }

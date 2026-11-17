@@ -33,7 +33,7 @@ const { decodeDocument, decodeStoredText } = require("../dist/stored-text");
 const { compactTime } = require("../dist/time");
 const { SOURCE } = require("../dist/locators");
 const { brandIdsOf, pageChoices } = require("../dist/brands");
-const { clearPushArmed, isPushRunning, markPushArmed, pushArmed, pushBatchAdvances, pushRequestAccepted, pushToken, readPushProgress, rememberPushedIds, resetPushState, runPushQueues, setPushStateDir, splitPushLanes, startDeliveryPush, stopPush } = require("../dist/push");
+const { clearPushArmed, forgetPushHost, isPushRunning, markPushArmed, pushArmed, pushBatchAdvances, pushRequestAccepted, pushToken, readPushProgress, rememberPushHost, rememberPushedIds, resetPushState, runPushQueues, setPushStateDir, splitPushLanes, startDeliveryPush, stopPush, submitPushBatch } = require("../dist/push");
 const { rememberInstallation } = require("../dist/installation-snapshot");
 const { resumeArmedPush } = require("../dist/push-resume");
 
@@ -132,33 +132,80 @@ test("push progress counts orders that already have a conversation", () => {
 
 test("a quarantined page moves on and an unfinished page stays", () => {
   assert.equal(pushBatchAdvances({
-    status: "completed",
     accepted: 1,
     duplicate: 0,
     quarantined: 1,
+    retryable: 0,
     sent: 2,
   }), true);
   assert.equal(pushBatchAdvances({
-    status: "completed",
     accepted: 2,
     duplicate: 0,
     quarantined: 0,
+    retryable: 0,
     sent: 2,
   }), true);
   assert.equal(pushBatchAdvances({
-    status: "running",
-    accepted: 0,
+    accepted: 2,
     duplicate: 0,
     quarantined: 0,
+    retryable: 1,
     sent: 2,
   }), false);
   assert.equal(pushBatchAdvances({
-    status: "completed",
     accepted: 1,
     duplicate: 0,
     quarantined: 0,
+    retryable: 0,
     sent: 2,
   }), false);
+});
+
+test("a page is pushed through host.push", async () => {
+  const installation = {
+    id: `push-host-${process.pid}`,
+    org_id: "org",
+    connector_type: "crm-delivery-sync",
+    status: "enabled",
+    config: {},
+    created_at: "2026-11-17T00:00:00.000Z",
+  };
+  const record = {
+    schema_version: 1,
+    source: "crm-delivery",
+    external_id: "order:context",
+    operation: "create",
+    occurred_at: "2026-11-17T00:00:00.000Z",
+    actor: { type: "assistant", id: "crm-delivery:assistant:订单" },
+    content: [{ type: "text", text: "达人：甲" }],
+  };
+  const seen = [];
+  rememberPushHost(installation.id, {
+    push: async (_installation, batch) => {
+      seen.push(batch);
+      return {
+        installation_id: installation.id,
+        stream_key: batch.stream_key,
+        batch_id: batch.batch_id,
+        accepted_count: 1,
+        duplicate_count: 0,
+        quarantined_count: 0,
+        retryable_count: 0,
+        records: [],
+      };
+    },
+  });
+  try {
+    assert.equal(await submitPushBatch(installation, "crm-delivery:order", [record]), true);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].stream_key, "crm-delivery:order");
+    assert.equal(seen[0].events.length, 1);
+    assert.equal(seen[0].events[0].external_id, "order:context");
+    forgetPushHost(installation.id);
+    assert.equal(await submitPushBatch(installation, "crm-delivery:order", [record]), false);
+  } finally {
+    resetPushState();
+  }
 });
 
 test("new orders and rechecks share one concurrency limit", async () => {

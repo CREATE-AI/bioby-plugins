@@ -20,7 +20,7 @@ import {
   rememberDeliveryCursor,
   selectStoredCursor,
 } from "./driver";
-import { bindPushWebhook, clearPushArmed, kickPush, markPushArmed, pushArmed, readPushProgress, startProjectPush, stopPush } from "./push";
+import { bindPushWebhook, clearPushArmed, forgetPushHost, kickPush, markPushArmed, pushArmed, readPushProgress, rememberPushHost, startProjectPush, stopPush } from "./push";
 import {
   DEFAULT_PROJECT_RECENT,
   DEFAULT_PROJECT_REFRESH_MS,
@@ -78,11 +78,13 @@ export const crmProjectSyncDriver: ChannelDriver = {
 
   async startInstallation(installation, host) {
     markPushArmed(installation.id);
+    rememberPushHost(installation.id, host);
     startProjectPush(projectPushInput(installation, () => openProjectStore(installation, host)));
   },
 
   async stopInstallation(installation, _host, context) {
     stopPush(installation.id);
+    forgetPushHost(installation.id);
     if (context?.reason === "delete") {
       clearPushArmed(installation.id);
     }

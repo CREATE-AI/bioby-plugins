@@ -7,15 +7,17 @@ export { setPushStateDir };
 import {
   ChannelDriverError,
   INGEST_SCHEMA_VERSION,
+  type ConnectorHost,
   type ConnectorInstallation,
   type IngestBatch,
   type IngestRecord,
+  type PushIngestBatch,
   type VerifiedWebhook,
   type WebhookConnector,
   type WebhookRequest,
 } from "@regenic/domain";
 import { deliveryCursorKey, rememberDeliveryCursor, selectStoredCursor } from "./cursor-store";
-import { PROJECT_SOURCE, SOURCE } from "./locators";
+import { PROJECT_SOURCE, SOURCE, projectStreamKey, streamKey } from "./locators";
 import type { DeliveryStore, OrderDoc, ProjectDoc, ProjectInfoDoc, ProjectStore } from "./model";
 import { advanceProject, parseProjectCursor } from "./project-sync";
 import { isEndedStatus } from "./status";
@@ -23,6 +25,7 @@ import { advanceDelivery, DELIVERY_LOG_TEXT_VERSION, parseOrderCursor } from "./
 import { settleEndedThread } from "./thread-fold";
 
 const runs = new Map<string, AbortController>();
+const hosts = new Map<string, ConnectorHost>();
 const tokens = new Map<string, string>();
 const wakes = new Map<string, () => void>();
 const progressMemory = new Map<string, PushSnapshot>();
@@ -50,6 +53,7 @@ export function resetPushState(): void {
     run.abort();
   }
   runs.clear();
+  hosts.clear();
   tokens.clear();
   wakes.clear();
   progressMemory.clear();
@@ -65,6 +69,15 @@ export function stopPush(installationId: string): void {
   runs.get(installationId)?.abort();
   runs.delete(installationId);
   notePushIdle(installationId);
+}
+
+/** 内核交给这次安装的 host。推送走 host.push，不再自己打 webhook。 */
+export function rememberPushHost(installationId: string, host: ConnectorHost): void {
+  hosts.set(installationId, host);
+}
+
+export function forgetPushHost(installationId: string): void {
+  hosts.delete(installationId);
 }
 
 export function markPushArmed(installationId: string): void {
@@ -336,6 +349,7 @@ export function startDeliveryPush(input: {
         signal,
         source: SOURCE,
         pushedId: row.id,
+        streamKey: streamKey(row.id),
         cursorKey: deliveryCursorKey(input.installation.id, row.id),
         parse: parseOrderCursor,
         advance: async (cursor) => {
@@ -383,6 +397,7 @@ export function startProjectPush(input: {
         signal,
         source: PROJECT_SOURCE,
         pushedId: row.id,
+        streamKey: projectStreamKey(row.id),
         cursorKey: key,
         parse: parseProjectCursor,
         advance: async (cursor) => {
@@ -496,6 +511,7 @@ async function pushPages<T>(input: {
   signal: AbortSignal;
   source: string;
   pushedId: string;
+  streamKey: string;
   cursorKey: string;
   parse: (raw: string | undefined) => T;
   advance: (cursor: T) => Promise<{ records: IngestRecord[]; cursor: T; hasMore: boolean }>;
@@ -504,7 +520,7 @@ async function pushPages<T>(input: {
   while (!input.signal.aborted) {
     const advanced = await input.advance(input.parse(raw));
     if (advanced.records.length > 0) {
-      const posted = await postBatch(input.installation, advanced.records, input.cursorKey, input.signal);
+      const posted = await submitPushBatch(input.installation, input.streamKey, advanced.records);
       if (!posted) {
         return;
       }
@@ -530,47 +546,31 @@ function skipEndedOrder(installationId: string, orderId: string, status: string 
     && !cursor.fp["end-done"];
 }
 
-async function postBatch(
+export async function submitPushBatch(
   installation: ConnectorInstallation,
+  streamKey: string,
   records: IngestRecord[],
-  cursorKey: string,
-  signal: AbortSignal,
 ): Promise<boolean> {
-  const port = process.env.PORT?.trim() || "4370";
-  const batch = batchFor(installation, records, cursorKey);
-  const response = await fetch(
-    `http://127.0.0.1:${port}/v1/me/connectors/${encodeURIComponent(installation.id)}/webhook`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-crm-push-token": pushToken(installation.id),
-      },
-      body: JSON.stringify(batch),
-      signal,
-    },
-  );
-  if (!response.ok) {
+  const push = hosts.get(installation.id)?.push;
+  if (!push || records.length === 0) {
     return false;
   }
-  const body = await response.json() as {
-    accepted_count?: number;
-    duplicate_count?: number;
-    quarantined_count?: number;
-    last_run_status?: string;
-  };
-  const accepted = body.accepted_count ?? 0;
-  const duplicate = body.duplicate_count ?? 0;
-  const quarantined = body.quarantined_count ?? 0;
+  let ack;
+  try {
+    ack = await push(installation, pushBatch(streamKey, records));
+  } catch (error) {
+    logPush(installation.id, streamKey, error);
+    return false;
+  }
   const posted = pushBatchAdvances({
-    status: body.last_run_status,
-    accepted,
-    duplicate,
-    quarantined,
+    accepted: ack.accepted_count,
+    duplicate: ack.duplicate_count,
+    quarantined: ack.quarantined_count,
+    retryable: ack.retryable_count,
     sent: records.length,
   });
   if (posted) {
-    notePushMessages(installation.id, accepted);
+    notePushMessages(installation.id, ack.accepted_count);
   }
   return posted;
 }
@@ -580,13 +580,13 @@ async function postBatch(
  * 这次写入没完成，停在这一页，下一轮再试。
  */
 export function pushBatchAdvances(input: {
-  status: string | undefined;
   accepted: number;
   duplicate: number;
   quarantined: number;
+  retryable: number;
   sent: number;
 }): boolean {
-  if (input.status !== "completed") {
+  if (input.retryable > 0) {
     return false;
   }
   if (input.quarantined > 0) {
@@ -595,23 +595,15 @@ export function pushBatchAdvances(input: {
   return input.accepted + input.duplicate === input.sent;
 }
 
-function batchFor(
-  installation: ConnectorInstallation,
-  records: IngestRecord[],
-  cursorKey: string,
-): IngestBatch {
+function pushBatch(key: string, records: IngestRecord[]): PushIngestBatch {
   const identity = [
-    installation.id,
-    cursorKey,
+    key,
     ...records.map((record) => `${record.operation}:${record.external_id}:${record.revision_id ?? ""}`),
   ].join("\u0000");
   return {
-    schema_version: INGEST_SCHEMA_VERSION,
-    connector_id: installation.id,
-    org_id: installation.org_id,
-    delivery_id: `crm-push:${createHash("sha256").update(identity).digest("hex")}`,
-    received_at: new Date().toISOString(),
-    records,
+    stream_key: key,
+    batch_id: `crm-push:${createHash("sha256").update(identity).digest("hex")}`,
+    events: records,
   };
 }
 
