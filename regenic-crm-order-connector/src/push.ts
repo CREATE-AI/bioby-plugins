@@ -335,6 +335,7 @@ export function startDeliveryPush(input: {
     store: DeliveryStore;
   }>;
   pageSize: number;
+  keepExternalSubmit?: boolean;
 }): void {
   startLoop({
     installation: input.installation,
@@ -362,6 +363,7 @@ export function startDeliveryPush(input: {
             cursor,
             pageSize: input.pageSize,
             now: new Date().toISOString(),
+            keepExternalSubmit: input.keepExternalSubmit === true,
           });
         },
       });

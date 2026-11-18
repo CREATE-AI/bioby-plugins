@@ -17,6 +17,7 @@ import type {
   MailDoc,
   OpenOrderHead,
   OrderDoc,
+  OrderListScope,
   PageQuery,
   ProjectDoc,
   ProjectInfoDoc,
@@ -42,12 +43,12 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
     return { brandIds, projectIds: brandProjectIds };
   }
   return {
-    async listOpenIds(afterId, limit, brandIds) {
+    async listOpenIds(afterId, limit, brandIds, scope) {
       const database = await db();
       const brand = await scopeFor(database, brandIds);
       const rows = await database
         .collection("project_fields")
-        .find(openFilter(afterId ? { _id: { $gt: asId(afterId) } } : {}, brand))
+        .find(openFilter(afterId ? { _id: { $gt: asId(afterId) } } : {}, brand, scope))
         .sort({ _id: 1 })
         .limit(limit)
         .project(ORDER_HEAD_FIELDS)
@@ -508,10 +509,19 @@ async function withProjects(database: Db, rows: Document[]): Promise<OpenOrderHe
 function openFilter(
   extra: Record<string, unknown> = {},
   brand?: { brandIds: string[]; projectIds: string[] },
+  scope?: OrderListScope,
 ): Filter<Document> {
+  const view = scope === "after_external"
+    ? {
+      $or: [
+        { "viewFlags.inDeliveryView": true },
+        { "viewFlags.inSubmitView": true, "submitWorkflow.status": "REVIEWING" },
+      ],
+    }
+    : { "viewFlags.inDeliveryView": true };
   const base = {
     isDeleted: { $ne: true },
-    "viewFlags.inDeliveryView": true,
+    ...view,
     ...extra,
   };
   if (!brand) {
@@ -585,6 +595,8 @@ function mapOrder(row: Document): OrderDoc {
     bargainValueAddedFeeUsd: numberOf(row.bargainValueAddedFeeUsd),
     status: stringOf(workflow?.status),
     inDeliveryView: asRecord(row.viewFlags)?.inDeliveryView === true,
+    inExternalSubmit: asRecord(row.viewFlags)?.inSubmitView === true
+      && stringOf(asRecord(row.submitWorkflow)?.status) === "REVIEWING",
     scriptLink: stringOf(workflow?.finalScriptLink),
     publishLinks: stringsOf(workflow?.publishLinks).length > 0
       ? stringsOf(workflow?.publishLinks)

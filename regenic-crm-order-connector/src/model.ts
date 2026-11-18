@@ -29,8 +29,10 @@ export interface OrderDoc {
   bargainServiceFeeUsd?: number | null;
   bargainValueAddedFeeUsd?: number | null;
   status?: string;
-  /** viewFlags.inDeliveryView。只有交付视图里的订单才继续同步。 */
+  /** viewFlags.inDeliveryView。交付视图里的订单继续同步。 */
   inDeliveryView?: boolean;
+  /** 提报视图里、提报状态是已外提（REVIEWING）。 */
+  inExternalSubmit?: boolean;
   /** selectedWorkflow.finalScriptLink，最终脚本链接。 */
   scriptLink?: string;
   /** selectedWorkflow.publishLinks，没有列表时用 publishLink。 */
@@ -116,6 +118,9 @@ export interface DecisionDoc {
   ask?: AskDoc;
 }
 
+/** delivery 只含交付视图。after_external 再加提报视图里已外提的订单。 */
+export type OrderListScope = "delivery" | "after_external";
+
 export interface OpenOrderHead {
   id: string;
   nickname?: string;
@@ -136,7 +141,12 @@ export interface PageQuery {
 
 export interface DeliveryStore {
   /** brandIds 不传表示不按品牌收。传入（含空数组）就只收这些品牌下的订单。 */
-  listOpenIds(afterId: string | null, limit: number, brandIds?: string[]): Promise<OpenOrderHead[]>;
+  listOpenIds(
+    afterId: string | null,
+    limit: number,
+    brandIds?: string[],
+    scope?: OrderListScope,
+  ): Promise<OpenOrderHead[]>;
   listRecentHeads(limit: number, brandIds?: string[]): Promise<OpenOrderHead[]>;
   listHeadsByIds(ids: string[], brandIds?: string[]): Promise<OpenOrderHead[]>;
   readOrder(id: string): Promise<OrderDoc | null>;
