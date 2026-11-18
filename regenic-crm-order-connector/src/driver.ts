@@ -35,8 +35,8 @@ import {
   subjectCatalog as deliverySubjectCatalog,
   threadId,
 } from "./locators";
-import { brandIdsOf, pageChoices } from "./brands";
-import { listBrandChoices, listChooserHeads, mongoStore } from "./mongo-store";
+import { brandIdsOf, pageChoices, uniqueStrings } from "./brands";
+import { listBrandChoices, listBrandChoicesByIds, listChooserHeads, listOrderHeadsByIds, mongoStore } from "./mongo-store";
 import { bindPushWebhook, clearPushArmed, forgetPushHost, kickPush, markPushArmed, pushArmed, readPushProgress, rememberPushHost, startDeliveryPush, stopPush } from "./push";
 import type { DeliveryStore, OpenOrderHead } from "./model";
 import { advanceDelivery, parseOrderCursor } from "./sync";
@@ -332,11 +332,21 @@ export const crmDeliverySyncDriver: ChannelDriver = {
     }
     try {
       if (field === "brand_ids") {
-        return pageChoices(await cachedBrandOptions(saved), query, cursor, limit);
+        const selected = await savedChoiceIds(env, values, "brand_ids", CONNECTOR_TYPE);
+        const listed = await cachedBrandOptions(saved);
+        return pageChoices(
+          await withMissingBrands(saved, listed, selected),
+          query, cursor, limit, selected,
+        );
       }
       if (field === "order_ids") {
         const brands = brandIdsOf({ brand_ids: values?.brand_ids });
-        return pageChoices(await cachedOrderOptions(saved, brands), query, cursor, limit);
+        const selected = await savedChoiceIds(env, values, "order_ids", CONNECTOR_TYPE);
+        const listed = await cachedOrderOptions(saved, brands);
+        return pageChoices(
+          await withMissingOrders(saved, listed, selected),
+          query, cursor, limit, selected,
+        );
       }
       return { options: [] };
     } catch {
@@ -622,7 +632,7 @@ const ORDER_OPTION_CACHE_MS = 15_000;
 let brandOptionCache: {
   key: string;
   at: number;
-  options: Array<{ value: string; label: { literal: string } }>;
+  options: Array<{ value: string; label: { literal: string }; title?: string }>;
 } | undefined;
 let orderOptionCache: {
   key: string;
@@ -672,6 +682,7 @@ async function readSavedInstallation(
 async function cachedBrandOptions(saved: { uri: string; db: string }): Promise<Array<{
   value: string;
   label: { literal: string };
+  title?: string;
 }>> {
   const key = createHash("sha256").update(`brand\u0000${saved.db}\u0000${saved.uri}`).digest("hex");
   const now = Date.now();
@@ -717,6 +728,55 @@ function chooserLabel(row: OpenOrderHead): string {
 
 function chooserTitle(row: OpenOrderHead): string {
   return [row.nickname, row.projectName, row.bloggerLink].filter((item) => item?.trim()).join(" ");
+}
+
+/** 表单里已经记住的编号。这一页没带时，再用上次保存的安装配置。 */
+export async function savedChoiceIds(
+  env: NodeJS.ProcessEnv,
+  values: Record<string, unknown> | undefined,
+  key: string,
+  connectorType: string,
+): Promise<string[]> {
+  if (values && Object.prototype.hasOwnProperty.call(values, key)) {
+    return uniqueStrings(values[key]).slice(0, 200);
+  }
+  await refreshInstallationsFromKernel(env);
+  return uniqueStrings(rememberedInstallation(connectorType)?.config[key]).slice(0, 200);
+}
+
+export async function withMissingBrands<T extends { value: string }>(
+  saved: { uri: string; db: string },
+  listed: T[],
+  selected: readonly string[],
+): Promise<T[]> {
+  const have = new Set(listed.map((option) => option.value));
+  const missing = selected.filter((id) => !have.has(id));
+  if (missing.length === 0) {
+    return listed;
+  }
+  const extras = await listBrandChoicesByIds(saved.uri, saved.db, missing);
+  return [...extras, ...listed] as T[];
+}
+
+async function withMissingOrders(
+  saved: { uri: string; db: string },
+  listed: Array<{ value: string; label: { literal: string }; title: string }>,
+  selected: readonly string[],
+): Promise<Array<{ value: string; label: { literal: string }; title: string }>> {
+  const have = new Set(listed.map((option) => option.value));
+  const missing = selected.filter((id) => !have.has(id));
+  if (missing.length === 0) {
+    return listed;
+  }
+  const heads = await listOrderHeadsByIds(saved.uri, saved.db, missing);
+  return [
+    ...heads.map((row) => ({
+      value: row.id,
+      label: { literal: chooserLabel(row) },
+      title: chooserTitle(row),
+    })),
+    ...listed,
+  ];
 }
 
 export function boundedInt(value: unknown, fallback: number, min: number, max: number): number {

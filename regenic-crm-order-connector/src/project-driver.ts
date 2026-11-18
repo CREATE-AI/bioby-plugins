@@ -17,6 +17,8 @@ import {
   connectionFromFormValues,
   readConnection,
   readSavedMongo,
+  savedChoiceIds,
+  withMissingBrands,
   rememberDeliveryCursor,
   selectStoredCursor,
 } from "./driver";
@@ -308,7 +310,9 @@ export const crmProjectSyncDriver: ChannelDriver = {
       return { options: [] };
     }
     try {
-      return pageChoices(await listBrandChoices(saved.uri, saved.db), query, cursor, limit);
+      const selected = await savedChoiceIds(env, values, "brand_ids", PROJECT_CONNECTOR_TYPE);
+      const listed = await listBrandChoices(saved.uri, saved.db);
+      return pageChoices(await withMissingBrands(saved, listed, selected), query, cursor, limit, selected);
     } catch {
       throw new ChannelDriverError("sync_failed", "读取品牌失败");
     }

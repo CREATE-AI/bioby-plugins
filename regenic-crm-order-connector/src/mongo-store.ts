@@ -549,7 +549,7 @@ async function projectIdsOfBrands(database: Db, brandIds: string[]): Promise<str
 export async function listBrandChoices(
   uri: string,
   dbName: string,
-): Promise<Array<{ value: string; label: { literal: string } }>> {
+): Promise<Array<{ value: string; label: { literal: string }; title?: string }>> {
   const database = await openConfiguredDb(uri, dbName);
   const rows = await database
     .collection("brands")
@@ -558,11 +558,58 @@ export async function listBrandChoices(
     .sort({ brandName: 1, _id: 1 })
     .limit(2_000)
     .toArray();
-  return rows.map((row) => {
-    const id = idOf(row._id);
-    const name = stringOf(row.brandName) || id;
-    return { value: id, label: { literal: name } };
-  });
+  return rows.map(brandChoice);
+}
+
+/** 按已保存的品牌编号去库里对名称，不依赖当前这一页有没有把它列出来。 */
+export async function listBrandChoicesByIds(
+  uri: string,
+  dbName: string,
+  ids: readonly string[],
+): Promise<Array<{ value: string; label: { literal: string }; title?: string }>> {
+  const unique = uniqueIds(ids);
+  if (unique.length === 0) {
+    return [];
+  }
+  const database = await openConfiguredDb(uri, dbName);
+  const rows = await database
+    .collection("brands")
+    .find(loose({ _id: { $in: unique.map(asId) }, isDeleted: { $ne: true } }))
+    .project({ brandName: 1 })
+    .toArray();
+  return rows.map(brandChoice);
+}
+
+export async function listOrderHeadsByIds(
+  uri: string,
+  dbName: string,
+  ids: readonly string[],
+): Promise<OpenOrderHead[]> {
+  const unique = uniqueIds(ids);
+  if (unique.length === 0) {
+    return [];
+  }
+  const database = await openConfiguredDb(uri, dbName);
+  const rows = await database
+    .collection("project_fields")
+    .find(loose({ _id: { $in: unique.map(asId) } }))
+    .project(ORDER_HEAD_FIELDS)
+    .toArray();
+  return withProjects(database, rows);
+}
+
+function uniqueIds(ids: readonly string[]): string[] {
+  return [...new Set(ids.map((id) => id.trim()).filter(Boolean))].slice(0, 200);
+}
+
+function brandChoice(row: Document): { value: string; label: { literal: string }; title?: string } {
+  const id = idOf(row._id);
+  const name = stringOf(row.brandName) || id;
+  return {
+    value: id,
+    label: { literal: name },
+    ...(name !== id ? { title: name } : {}),
+  };
 }
 
 function mapOrder(row: Document): OrderDoc {

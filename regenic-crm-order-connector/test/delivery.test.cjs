@@ -99,6 +99,19 @@ test("brand ids keep one copy and paging can search", () => {
     { value: "2", label: { literal: "贝塔" } },
   ], "贝", undefined, 50);
   assert.deepEqual(page.options.map((option) => option.value), ["2"]);
+  const echoed = pageChoices([
+    { value: "1", label: { literal: "阿尔法" } },
+    { value: "2", label: { literal: "贝塔" } },
+    { value: "3", label: { literal: "伽马" } },
+  ], undefined, undefined, 2, ["3"]);
+  assert.deepEqual(echoed.options.map((option) => option.value), ["3", "1"]);
+  assert.equal(echoed.next_cursor, "2");
+  const searched = pageChoices([
+    { value: "1", label: { literal: "阿尔法" } },
+    { value: "2", label: { literal: "贝塔" } },
+    { value: "3", label: { literal: "伽马" } },
+  ], "贝", undefined, 50, ["3"]);
+  assert.deepEqual(searched.options.map((option) => option.value), ["2"]);
 });
 
 test("push progress counts orders that already have a conversation", () => {
