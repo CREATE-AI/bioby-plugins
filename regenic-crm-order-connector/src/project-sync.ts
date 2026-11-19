@@ -3,6 +3,7 @@ import {
   PROJECT_ORDER_LIMIT,
   PROJECT_SOURCE,
   PROJECT_UNIT_KIND,
+  taggedThreadName,
   threadId as orderThreadId,
 } from "./locators";
 import type { ProjectInfoDoc, ProjectOrderRow, ProjectStore } from "./model";
@@ -315,7 +316,7 @@ function emit(
 ): IngestRecord[] {
   for (const step of withOffsets(steps)) {
     const hash = shortHash(
-      step.tombstone ? `tombstone:${step.suffix}` : `${step.actor}\n${step.speaker}\n${step.text}`,
+      step.tombstone ? `tombstone:${step.suffix}` : `${label}\n${step.actor}\n${step.speaker}\n${step.text}`,
     );
     const previous = cursor.fp[step.suffix];
     if (!step.tombstone && previous === hash) {
@@ -343,7 +344,7 @@ function emit(
 }
 
 export function projectLabel(project: { id: string; name?: string }): string {
-  return project.name?.trim() || project.id;
+  return taggedThreadName("项目", project.name?.trim() || project.id);
 }
 
 export function projectStatusLabel(status: string | undefined): string {

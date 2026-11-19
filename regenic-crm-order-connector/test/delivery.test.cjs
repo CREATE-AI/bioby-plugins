@@ -502,7 +502,7 @@ test("directory waits until the id scan finishes and the end step is written", a
   assert.equal(first.complete, false);
   assert.equal(first.members.length, 1);
   assert.equal(first.members[0].stream_key, "crm-delivery:a");
-  assert.equal(first.members[0].label, "小明 · 春季");
+  assert.equal(first.members[0].label, "交付订单-小明 · 春季");
 
   const second = await listDirectoryPage({
     cursor: first.next_cursor,

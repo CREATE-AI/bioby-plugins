@@ -39,7 +39,7 @@ import {
 import type { ProjectHead, ProjectStore } from "./model";
 import { listBrandChoices, projectStore } from "./mongo-store";
 import { projectLocaleTables } from "./project-locales";
-import { advanceProject, parseProjectCursor } from "./project-sync";
+import { advanceProject, parseProjectCursor, projectLabel } from "./project-sync";
 
 const projectDirectory = freshDirectoryMemory();
 
@@ -131,7 +131,7 @@ export const crmProjectSyncDriver: ChannelDriver = {
             memory: projectDirectory,
             kind: "project",
             member: (id) => ({ stream_key: projectStreamKey(id), thread_id: projectThreadId(id) }),
-            labelOf: (row) => row.name?.trim() || row.id,
+            labelOf: (row) => projectLabel(row),
             listOpenIds: async (afterId, pageLimit) => {
               if (!heads || headsKey !== key || !afterId) {
                 headsKey = key;

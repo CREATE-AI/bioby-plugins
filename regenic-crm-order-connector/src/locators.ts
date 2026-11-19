@@ -54,6 +54,16 @@ export function projectThreadId(projectId: string): string {
   return `${PROJECT_SOURCE}:${projectId}`;
 }
 
+/** 收件箱里项目和交付订单混在一起。名字前面加种类，才分得开。 */
+export function taggedThreadName(tag: "项目" | "交付订单", name: string): string {
+  const text = name.trim();
+  const prefix = `${tag}-`;
+  if (text.startsWith(prefix)) {
+    return text;
+  }
+  return `${prefix}${text}`;
+}
+
 export function projectSubjectCatalog(): SubjectCatalog {
   return {
     kinds: [{ id: PROJECT_UNIT_KIND, label: "kind.project" }],

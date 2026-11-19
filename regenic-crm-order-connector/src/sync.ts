@@ -5,7 +5,7 @@ import { stepRecord, type StepDraft } from "./records";
 import { latestMailText } from "./mail-text";
 import { formatReviewChange } from "./review-log";
 import { compactTime, shortHash, stepToken, withOffsets } from "./time";
-import { projectThreadId } from "./locators";
+import { projectThreadId, taggedThreadName } from "./locators";
 import {
   isAutoNote,
   logChangesStatus,
@@ -458,7 +458,7 @@ function emit(
   const stamped = withOffsets(steps);
   for (const step of stamped) {
     const hash = shortHash(
-      step.tombstone ? `tombstone:${step.suffix}` : `${step.actor}\n${step.speaker}\n${step.text}`,
+      step.tombstone ? `tombstone:${step.suffix}` : `${label}\n${step.actor}\n${step.speaker}\n${step.text}`,
     );
     const previous = cursor.fp[step.suffix];
     if (!step.tombstone && previous === hash) {
@@ -1133,10 +1133,8 @@ function projectFingerprint(project: ProjectDoc | null): unknown {
 function conversationLabel(order: OrderDoc, project: ProjectDoc | null): string {
   const nick = order.nickname?.trim();
   const name = project?.name?.trim();
-  if (nick && name) {
-    return `${nick} · ${name}`;
-  }
-  return nick || name || order.id;
+  const base = nick && name ? `${nick} · ${name}` : nick || name || order.id;
+  return taggedThreadName("交付订单", base);
 }
 
 function hasRealMail(cursor: OrderCursor): boolean {

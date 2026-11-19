@@ -49,6 +49,7 @@ test("a new project writes info, status and its in-delivery orders, not project 
   const { records, cursor } = await runUntilLive(projectInfo(), store);
   const byStep = new Map(records.map((record) => [record.external_id.split(":")[1], record]));
   const context = recordText(byStep.get("context"));
+  assert.equal(recordSurface(byStep.get("context")).conversation_label, "项目-春季");
   assert.match(context, /项目：春季/);
   assert.match(context, /项目 ID：p1/);
   assert.match(context, /平台：Instagram、TikTok/);
@@ -234,6 +235,7 @@ test("order context points to its project conversation", async () => {
   });
   const context = advanced.records.find((record) => record.external_id === "a:context");
   assert.match(recordText(context), /项目 ID：p1\n项目会话：crm-project:p1/);
+  assert.equal(recordSurface(context).conversation_label, "交付订单-小明");
 });
 
 test("an order conversation written before the project link gets its context rewritten once", async () => {

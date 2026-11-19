@@ -1,5 +1,5 @@
 import type { SyncDirectoryMember, SyncDirectoryPage } from "@regenic/domain";
-import { RESTART_WAIT_MS, streamKey, threadId } from "./locators";
+import { RESTART_WAIT_MS, streamKey, taggedThreadName, threadId } from "./locators";
 import type { OpenOrderHead } from "./model";
 
 export interface DirectoryCursor {
@@ -167,8 +167,6 @@ export function pageSelectedHeads<T extends DirectoryHead>(
 function headLabel(row: OpenOrderHead): string {
   const nick = row.nickname?.trim();
   const project = row.projectName?.trim();
-  if (nick && project) {
-    return `${nick} · ${project}`;
-  }
-  return nick || project || row.id;
+  const name = nick && project ? `${nick} · ${project}` : nick || project || row.id;
+  return taggedThreadName("交付订单", name);
 }
