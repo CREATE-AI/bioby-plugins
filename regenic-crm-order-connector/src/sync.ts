@@ -118,10 +118,12 @@ export async function advanceDelivery(input: {
   cursor: OrderCursor;
   pageSize: number;
   now: string;
+  /** 选了「已外提以后」时，提报视图里的已外提订单也继续同步。 */
+  keepExternalSubmit?: boolean;
 }): Promise<{ records: IngestRecord[]; cursor: OrderCursor; hasMore: boolean; wroteEnd: boolean }> {
   const cursor = input.cursor;
   cursor.seq = (cursor.seq ?? 0) + 1;
-  if (!input.order || input.order.isDeleted || input.order.inDeliveryView !== true) {
+  if (!orderStaysOpen(input.order, input.keepExternalSubmit === true) || !input.order) {
     return finishClosed(input.orderId, input.order, input.project, cursor, input.now);
   }
   const order = input.order;
@@ -369,6 +371,16 @@ async function pullDecisions(
   cursor.decisionAfter = page.full && last ? last.id : null;
   bumpWatermark(cursor, last?.updatedAt);
   return page.full;
+}
+
+function orderStaysOpen(order: OrderDoc | null, keepExternalSubmit: boolean): boolean {
+  if (!order || order.isDeleted) {
+    return false;
+  }
+  if (order.inDeliveryView === true) {
+    return true;
+  }
+  return keepExternalSubmit && order.inExternalSubmit === true;
 }
 
 function finishClosed(

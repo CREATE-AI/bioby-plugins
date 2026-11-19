@@ -382,6 +382,8 @@ test("install rejects a bad Mongo URI and keeps the secret field for the host to
   assert.equal(config.selection, "all");
   assert.deepEqual(config.brand_ids, []);
   assert.equal(selectionOf({}), "all");
+  assert.equal(selectionOf({ selection: "after_external" }), "after_external");
+  assert.equal(installConfig({ selection: "after_external" }).selection, "after_external");
   const branded = installConfig({
     mongo_uri: "mongodb://localhost:27017/crm",
     brand_ids: ["b1", "b1", " b2 "],
@@ -536,6 +538,50 @@ test("directory waits until the id scan finishes and the end step is written", a
   });
   assert.equal(done.complete, true);
   assert.deepEqual(memory.previousIds, ["a", "b"]);
+});
+
+test("an externally submitted order stays open only for that scope", async () => {
+  const submitted = order({
+    inDeliveryView: false,
+    inExternalSubmit: true,
+    status: "REVIEWING",
+  });
+  const kept = await advanceDelivery({
+    orderId: "a",
+    order: submitted,
+    project: null,
+    store: emptyStore(),
+    cursor: emptyOrderCursor(),
+    pageSize: 20,
+    now: "2026-11-06T10:00:00.000Z",
+    keepExternalSubmit: true,
+  });
+  assert.equal(kept.wroteEnd, false);
+  assert.equal(kept.records.some((record) => String(record.external_id).includes(":end-")), false);
+
+  const closed = await advanceDelivery({
+    orderId: "a",
+    order: submitted,
+    project: null,
+    store: emptyStore(),
+    cursor: emptyOrderCursor(),
+    pageSize: 20,
+    now: "2026-11-06T10:00:00.000Z",
+  });
+  assert.equal(closed.wroteEnd, true);
+  assert.match(closed.records[0].external_id, /^a:end-NOT_IN_DELIVERY_VIEW-/);
+
+  const leftSubmit = await advanceDelivery({
+    orderId: "a",
+    order: order({ inDeliveryView: false, inExternalSubmit: false }),
+    project: null,
+    store: emptyStore(),
+    cursor: emptyOrderCursor(),
+    pageSize: 20,
+    now: "2026-11-06T10:00:00.000Z",
+    keepExternalSubmit: true,
+  });
+  assert.equal(leftSubmit.wroteEnd, true);
 });
 
 test("an order that left the delivery view writes one end step and can be marked finished", async () => {

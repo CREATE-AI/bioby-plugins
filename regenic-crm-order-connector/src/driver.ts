@@ -125,8 +125,13 @@ export const crmDeliverySyncDriver: ChannelDriver = {
             concurrency: concurrencyOf(installation),
             now: Date.now(),
             listOpenIds: async (afterId, limit) => {
-              if (mode === "all") {
-                return store.listOpenIds(afterId, limit, brands);
+              if (mode === "all" || mode === "after_external") {
+                return store.listOpenIds(
+                  afterId,
+                  limit,
+                  brands,
+                  mode === "after_external" ? "after_external" : "delivery",
+                );
               }
               if (!selected || selectedKey !== key || !afterId) {
                 selectedKey = key;
@@ -170,6 +175,7 @@ export const crmDeliverySyncDriver: ChannelDriver = {
               cursor: parseOrderCursor(selected),
               pageSize: ORDER_PAGE_SIZE,
               now,
+              keepExternalSubmit: selectionOf(installation.config) === "after_external",
             });
             if (advanced.wroteEnd) {
               markDeliveryEndWritten(orderId);
@@ -256,6 +262,7 @@ export const crmDeliverySyncDriver: ChannelDriver = {
             { value: "pick", label: "option.selection.pick" },
             { value: "recent", label: "option.selection.recent" },
             { value: "all", label: "option.selection.all" },
+            { value: "after_external", label: "option.selection.afterExternal" },
           ],
         },
         {
@@ -428,10 +435,11 @@ async function listScopedOrderHeads(
   if (mode === "recent") {
     return store.listRecentHeads(recentOf(config), brands);
   }
+  const scope = mode === "after_external" ? "after_external" : "delivery";
   const all: OpenOrderHead[] = [];
   let after: string | null = null;
   for (;;) {
-    const page = await store.listOpenIds(after, 500, brands);
+    const page = await store.listOpenIds(after, 500, brands, scope);
     all.push(...page);
     if (page.length < 500) {
       return all;
@@ -464,6 +472,7 @@ function deliveryPushInput(
     intervalMs: refreshOf(installation),
     concurrency: concurrencyOf(installation),
     pageSize: ORDER_PAGE_SIZE,
+    keepExternalSubmit: selectionOf(installation.config) === "after_external",
     listHeads: async () => {
       if (brandIdsOf(installation.config).length === 0) {
         return [];
@@ -605,9 +614,9 @@ function concurrencyOf(installation: ConnectorInstallation): number {
   return boundedInt(installation.config.sync_concurrency, DEFAULT_CONCURRENCY, 1, MAX_CONCURRENCY);
 }
 
-export function selectionOf(config: Record<string, unknown>): "all" | "recent" | "pick" {
+export function selectionOf(config: Record<string, unknown>): "all" | "recent" | "pick" | "after_external" {
   const value = stringOf(config.selection);
-  if (value === "recent" || value === "pick") {
+  if (value === "recent" || value === "pick" || value === "after_external") {
     return value;
   }
   return "all";
