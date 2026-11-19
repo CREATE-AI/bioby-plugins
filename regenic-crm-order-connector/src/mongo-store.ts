@@ -515,6 +515,7 @@ function openFilter(
     ? {
       $or: [
         { "viewFlags.inDeliveryView": true },
+        // 审核中。已外提之后，提报状态会变成 REVIEWING。
         { "viewFlags.inSubmitView": true, "submitWorkflow.status": "REVIEWING" },
       ],
     }

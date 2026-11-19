@@ -118,7 +118,7 @@ export async function advanceDelivery(input: {
   cursor: OrderCursor;
   pageSize: number;
   now: string;
-  /** 选了「已外提以后」时，提报视图里的已外提订单也继续同步。 */
+  /** 选了「已外提以后」时，提报视图里审核中的订单也继续同步。已外提之后状态会变成审核中。 */
   keepExternalSubmit?: boolean;
 }): Promise<{ records: IngestRecord[]; cursor: OrderCursor; hasMore: boolean; wroteEnd: boolean }> {
   const cursor = input.cursor;

@@ -31,7 +31,7 @@ export interface OrderDoc {
   status?: string;
   /** viewFlags.inDeliveryView。交付视图里的订单继续同步。 */
   inDeliveryView?: boolean;
-  /** 提报视图里、提报状态是已外提（REVIEWING）。 */
+  /** 提报视图里、提报状态是审核中（REVIEWING）。已外提之后会变成这个状态。 */
   inExternalSubmit?: boolean;
   /** selectedWorkflow.finalScriptLink，最终脚本链接。 */
   scriptLink?: string;
@@ -118,7 +118,7 @@ export interface DecisionDoc {
   ask?: AskDoc;
 }
 
-/** delivery 只含交付视图。after_external 再加提报视图里已外提的订单。 */
+/** delivery 只含交付视图。after_external 再加提报视图里审核中的订单。 */
 export type OrderListScope = "delivery" | "after_external";
 
 export interface OpenOrderHead {

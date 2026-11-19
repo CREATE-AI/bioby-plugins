@@ -65,7 +65,7 @@ export const deliveryLocaleTables = defineLocaleTables({
     "field.brands.description": "可以选一个或多个品牌。列表按上面填写的数据库地址去查。只同步这些品牌下的项目和订单。不选品牌就不会同步。",
     "field.brands.placeholder": "先填上面的数据库地址，再搜索品牌",
     "field.selection": "同步哪些订单",
-    "field.selection.description": "可以同步交付视图里的全部订单，只同步最新的，自己勾选，或同步已外提以后的全部订单。",
+    "field.selection.description": "可以同步交付视图里的全部订单，只同步最新的，自己勾选，或再加上提报视图里、提报状态是审核中的订单。已外提之后状态会变成审核中。不含已删除的订单。",
     "option.selection.pick": "自己勾选",
     "option.selection.recent": "提报时间最新的",
     "option.selection.all": "交付视图里的全部订单",
