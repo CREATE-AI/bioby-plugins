@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import type { ConnectorInstallation, ConnectorInstallationStatus, JsonValue } from "@regenic/domain";
+import { kernelBase, kernelHeaders } from "./kernel-http";
 import { pushStateDir, pushStatePath } from "./push-paths";
 
 const REFRESH_MS = 5_000;
@@ -78,8 +79,8 @@ export function refreshInstallationsFromKernel(
 }
 
 function fetchInstallations(env: NodeJS.ProcessEnv): Promise<ConnectorInstallation[] | undefined> {
-  const port = env.PORT?.trim() || "4370";
-  return fetch(`http://127.0.0.1:${port}/v1/me/engine?detail=0`, {
+  return fetch(`${kernelBase(env)}/v1/me/engine?detail=0`, {
+    headers: kernelHeaders({}, env),
     signal: AbortSignal.timeout(2_000),
   }).then(async (response) => {
     if (!response.ok) {

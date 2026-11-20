@@ -4,6 +4,7 @@ import {
   listRememberedInstallations,
   refreshInstallationsFromKernel,
 } from "./installation-snapshot";
+import { kernelBase } from "./kernel-http";
 import { isPushRunning, stopPush } from "./push";
 
 const RESUME_DELAY_MS = 8_000;
@@ -103,9 +104,8 @@ function configHasUri(config: Record<string, JsonValue>): boolean {
 }
 
 async function kernelAccepting(): Promise<boolean> {
-  const port = process.env.PORT?.trim() || "4370";
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/health`, {
+    const response = await fetch(`${kernelBase()}/health`, {
       signal: AbortSignal.timeout(1_000),
     });
     return response.ok;

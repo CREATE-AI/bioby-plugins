@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { deliveryCursorKey, rememberDeliveryCursor, selectStoredCursor } from "./cursor-store";
+import { kernelBase, kernelHeaders } from "./kernel-http";
 import { threadId } from "./locators";
 import { isEndedStatus } from "./status";
 import { parseOrderCursor } from "./sync";
@@ -95,7 +96,7 @@ const httpThreadFoldClient: ThreadFoldClient = {
   async read(id) {
     const response = await fetch(
       `${kernelBase()}/v1/me/inbox?thread_id=${encodeURIComponent(id)}&limit=1`,
-      { signal: AbortSignal.timeout(8000) },
+      { headers: kernelHeaders(), signal: AbortSignal.timeout(8000) },
     );
     if (!response.ok) {
       await response.text().catch(() => "");
@@ -119,7 +120,7 @@ const httpThreadFoldClient: ThreadFoldClient = {
   async write(id, hidden, version) {
     const response = await fetch(`${kernelBase()}/v1/me/conversations/prefs`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: kernelHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({
         thread_id: id,
         hidden,
@@ -140,7 +141,3 @@ const httpThreadFoldClient: ThreadFoldClient = {
   },
 };
 
-function kernelBase(): string {
-  const port = process.env.PORT?.trim() || "4370";
-  return `http://127.0.0.1:${port}`;
-}
