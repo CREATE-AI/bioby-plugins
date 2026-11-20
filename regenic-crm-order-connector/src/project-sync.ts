@@ -1,6 +1,5 @@
 import type { IngestRecord } from "@regenic/domain";
 import {
-  PROJECT_ORDER_LIMIT,
   PROJECT_SOURCE,
   PROJECT_UNIT_KIND,
   taggedThreadName,
@@ -76,7 +75,7 @@ export async function advanceProject(input: {
   emit(project.id, label, cursor, records, [inboxStep(input.now)]);
 
   if (cursor.stage === "orders") {
-    const open = await input.store.listProjectOrders(project.id, PROJECT_ORDER_LIMIT);
+    const open = await input.store.listProjectOrders(project.id);
     const budget = Math.max(1, input.pageSize - records.length);
     const slice = open.slice(cursor.orderSkip, cursor.orderSkip + budget);
     cursor.orderSkip += slice.length;
@@ -129,7 +128,7 @@ async function syncOrders(
   label: string,
   records: IngestRecord[],
 ): Promise<void> {
-  const open = await store.listProjectOrders(project.id, PROJECT_ORDER_LIMIT);
+  const open = await store.listProjectOrders(project.id);
   const openIds = new Set(open.map((row) => row.id));
   const left = cursor.orders.filter((id) => !openIds.has(id));
   const steps = open.map((row) => orderStep(row, project));

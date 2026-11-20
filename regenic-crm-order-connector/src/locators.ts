@@ -43,8 +43,6 @@ export const DEFAULT_PROJECT_RECENT = 30;
 export const PROJECT_RECENT_MAX = 600;
 /** 目录一次交出的项目个数。选「全部」时不要再按十几个一页翻。 */
 export const PROJECT_DIRECTORY_PAGE = 5_000;
-/** 一个项目里最多列多少张交付中的订单。 */
-export const PROJECT_ORDER_LIMIT = 300;
 
 export function projectStreamKey(projectId: string): string {
   return `${PROJECT_SOURCE}:${projectId}`;

@@ -205,7 +205,8 @@ export interface ProjectStore {
   /** 给出的项目里，已经删除或者库里没有了的那些。 */
   listGoneProjects(ids: string[]): Promise<string[]>;
   readProjectInfo(id: string): Promise<ProjectInfoDoc | null>;
-  listProjectOrders(projectId: string, limit: number): Promise<ProjectOrderRow[]>;
+  /** 这个项目里还在交付视图中的全部订单，不截断。 */
+  listProjectOrders(projectId: string): Promise<ProjectOrderRow[]>;
   readOrderRows(ids: string[]): Promise<ProjectOrderRow[]>;
 }
 

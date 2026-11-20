@@ -181,12 +181,11 @@ export function projectStore(uri: string, dbName: string): ProjectStore {
       return row ? mapProjectInfo(row) : null;
     },
 
-    async listProjectOrders(projectId, limit) {
+    async listProjectOrders(projectId) {
       const rows = await (await db())
         .collection("project_fields")
         .find(openFilter({ projectId }))
         .sort({ "selectedWorkflow.selectedTime": 1, _id: 1 })
-        .limit(limit)
         .project(ORDER_ROW_FIELDS)
         .toArray();
       return rows.map(mapOrderRow);
