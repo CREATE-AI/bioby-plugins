@@ -10,6 +10,7 @@ import {
 } from "mongodb";
 import { decodeDocument } from "./stored-text";
 import type {
+  CollectionDoc,
   DecisionDoc,
   DeliveryStore,
   IdPage,
@@ -659,6 +660,7 @@ function mapOrder(row: Document): OrderDoc {
     reviewHint: stringOf(row.deliveryHumanReviewHint),
     reviewHandler: stringOf(row.deliveryHumanReviewHandler),
     reviewAt: iso(row.deliveryHumanReviewNeededAt),
+    collections: mapCollections(row),
     follows: follows.map((item) => {
       const follow = asRecord(item) ?? {};
       return {
@@ -674,6 +676,30 @@ function mapOrder(row: Document): OrderDoc {
       };
     }),
   };
+}
+
+function mapCollections(row: Document): CollectionDoc[] {
+  const payment = asRecord(row.paymentWorkflow);
+  const list = Array.isArray(payment?.collectionRecords) ? payment.collectionRecords : [];
+  const records: CollectionDoc[] = [];
+  for (const item of list) {
+    const record = asRecord(item);
+    if (!record) {
+      continue;
+    }
+    records.push({
+      customerRecordId: stringOf(record.customerCollectionRecordId),
+      date: iso(record.collectionDate),
+      amount: numberOf(record.collectionAmount),
+      method: stringOf(record.collectionMethod),
+      collectionId: stringOf(record.collectionId),
+      voucher: stringOf(record.collectionVoucher),
+      remark: stringOf(record.collectionRemark),
+      operatorName: stringOf(record.operatorName),
+      status: stringOf(record.collectionRecordStatus),
+    });
+  }
+  return records;
 }
 
 function mapProject(row: Document): ProjectDoc {

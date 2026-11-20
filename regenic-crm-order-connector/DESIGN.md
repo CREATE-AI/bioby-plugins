@@ -31,7 +31,7 @@ CRM 后端是 `bioby-email`，订单在 MongoDB 的 `project_fields`。前端 `b
 
 1. 安装时填 MongoDB 连接。地址是普通文本，写在安装配置里，设置页上能看到。
 2. 第一次把交付视图里的订单收进来，每张订单变成一条会话。
-3. 会话里按时间放：订单上下文、邮件往来、跟进记录、变更日志。有要通知的，再加带前缀的通知。
+3. 会话里按时间放：订单上下文、邮件往来、跟进记录、回款记录、变更日志。有要通知的，再加带前缀的通知。
 4. 之后按第 6 节更新还在交付视图里的订单。目录每一页放行几张可配置。
 5. 订单离开交付视图，或被删除之后，会话里留下一条结束记录，以后不再拉这张单。
 
@@ -70,6 +70,8 @@ CRM 后端是 `bioby-email`，订单在 MongoDB 的 `project_fields`。前端 `b
 - 增量检查用邮件 `sentDate` 或 `updatedTime` 晚于这张订单的水位，不把历史再全读一遍。
 
 跟进在 `selectedWorkflow.followUpRecords`，和邮件排在同一条时间线上。内容以「发送跟进邮件」或「已发送下单邮件」开头的，编号用 `<订单id>:note-auto-<正文指纹>`。当时还没有真实邮件，就留下。后来出现了 `INBOX` / `SPAM` / `SENT` 里的真邮件，对已经写过的这些自动备注发 `tombstone`，会话里不再留。
+
+回款在 `paymentWorkflow.collectionRecords`。一条回款一条消息，说话人是「回款」。正文固定先写 `回款日期`、`回款金额`、`回款状态`（`COLLECTING` 写回款中，`COLLECTED` 写已回款），有值再写回款方式、回款 ID、操作人、备注、凭证。编号用 `<订单id>:collect-<客户回款记录 id>`，没有这个 id 时用回款 ID。记录改了就改同一条，记录被删掉就作废。已结束的订单也会继续写回款。
 
 变更日志用 `project_field_change_logs`：`logTime`、`changeType`（`UPDATE` / `ROLLBACK` / `OPERATION`）、`operatorName`、`reason`、`changes[]`。它只是过程的一部分。CRM 写日志失败时只打警告，转人工标记和一部分巡检字段是直接改 `project_fields`，不会进这张表。每次检查都读订单文档上的当前状态、`updatedTime`、转人工标记、`bargainTerms.sharedScene`。日志里没有、但订单上的状态或标记和这张订单游标里上次看到的不一样，就按订单上的 `updatedTime` 补一条步骤。
 
@@ -128,6 +130,7 @@ GitHub Actions 里，一次运行是一条时间线。每一步有固定名字�
 | 订单上下文 | `<订单id>:context` | 订单 `createdTime`。项目后来改了 brief / 权益 / 需求，不改这条，另起一条 `<订单id>:context-<紧凑的项目更新时间>` | 系统 |
 | 一封邮件 | `<订单id>:mail-<邮件id>` | 邮件 `sentDate` | 达人回的记用户，我们发出的记助手 |
 | 一条跟进 | `<订单id>:note-<紧凑的跟进时间>-<跟进人>-<正文短指纹>` | `followTime` | 系统。跟进没有自己的 id。正文变了指纹会变，见 5.2：作废旧编号再写新的，不留两条 |
+| 一条回款 | `<订单id>:collect-<客户回款记录 id 或回款 ID>` | `collectionDate` | 说话人是「回款」。同一条记录改了就改这一条，删了就作废 |
 | 一条变更 | `<订单id>:log-<日志id>` | `logTime` | 系统。正文写操作人、原因、每个字段的旧值到新值 |
 | 一条通知 | `<订单id>:notice-<紧凑的来源时间>-<给谁>` | 和触发它的那条变更或决策事项同一时刻，排在那条后面 | 系统 |
 

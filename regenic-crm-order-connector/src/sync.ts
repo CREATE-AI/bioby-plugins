@@ -10,6 +10,7 @@ import {
   isAutoNote,
   logChangesStatus,
   mailBelongs,
+  type CollectionDoc,
   type DecisionDoc,
   type DeliveryStore,
   type FollowDoc,
@@ -51,6 +52,8 @@ export interface OrderCursor {
   logText?: number;
   /** 已结束的会话已经移到不显示。人再拖回来就不再移。 */
   folded?: boolean;
+  /** 已经写进会话的回款记录编号。记录被删掉时用来作废旧消息。 */
+  collects?: string[];
 }
 
 /** 变更记录的写法版本。旧游标低于这个数时，会把 AI 内审再写一遍。 */
@@ -134,6 +137,8 @@ export async function advanceDelivery(input: {
     (cursor.logText ?? 0) >= DELIVERY_LOG_TEXT_VERSION
   ) {
     const records: IngestRecord[] = [];
+    const label = conversationLabel(order, input.project);
+    emit(order, label, cursor, records, collectionSteps(order, cursor));
     dropEndNote(order, input.project, cursor, records, input.now);
     return { records, cursor, hasMore: false, wroteEnd: true };
   }
@@ -238,6 +243,7 @@ async function pullHistoryStage(
     return pullDecisions(input, cursor, label, records, budget, false);
   }
   emit(order, label, cursor, records, tailSteps(order, input.project, cursor, input.now));
+  emit(order, label, cursor, records, collectionSteps(order, cursor));
   return false;
 }
 
@@ -253,6 +259,7 @@ async function pullLive(
   const mailsMore = await pullMails(input, cursor, label, records, budget, true);
   const notes = noteSteps(order, cursor, hasRealMail(cursor));
   emit(order, label, cursor, records, notes);
+  emit(order, label, cursor, records, collectionSteps(order, cursor));
   const logsMore = await pullLogs(input, cursor, label, records, budget, true);
   const decisionsMore = await pullDecisions(input, cursor, label, records, budget, true);
   const more = mailsMore || logsMore || decisionsMore;
@@ -743,6 +750,87 @@ function storedFaceSteps(order: OrderDoc, project: ProjectDoc | null, cursor: Or
     }
   }
   return steps;
+}
+
+function collectionSteps(order: OrderDoc, cursor: OrderCursor): StepDraft[] {
+  const steps: StepDraft[] = [];
+  const seen = new Set<string>();
+  for (const [index, row] of (order.collections ?? []).entries()) {
+    let suffix = collectionSuffix(row, index);
+    if (seen.has(suffix)) {
+      suffix = `${suffix}-${index}`;
+    }
+    seen.add(suffix);
+    steps.push({
+      suffix,
+      at: row.date || order.updatedTime || new Date(0).toISOString(),
+      kind: "note",
+      actor: "assistant",
+      speaker: "回款",
+      text: collectionText(row),
+    });
+  }
+  for (const suffix of cursor.collects ?? []) {
+    if (!seen.has(suffix) && cursor.fp[suffix]) {
+      steps.push({
+        suffix,
+        at: order.updatedTime || new Date(0).toISOString(),
+        kind: "note",
+        actor: "assistant",
+        speaker: "回款",
+        text: "",
+        tombstone: true,
+      });
+    }
+  }
+  cursor.collects = [...seen];
+  return steps;
+}
+
+function collectionSuffix(row: CollectionDoc, index: number): string {
+  const id = row.customerRecordId?.trim() || row.collectionId?.trim();
+  if (id) {
+    return `collect-${stepToken(id)}`;
+  }
+  return `collect-${index}-${shortHash(`${row.date ?? ""}|${row.amount ?? ""}|${row.status ?? ""}|${row.method ?? ""}`)}`;
+}
+
+function collectionText(row: CollectionDoc): string {
+  const lines = [
+    `回款日期：${collectionDay(row.date)}`,
+    `回款金额：${row.amount ?? ""}`,
+    `回款状态：${collectionStatusLabel(row.status)}`,
+  ];
+  if (row.method?.trim()) {
+    lines.push(`回款方式：${row.method.trim()}`);
+  }
+  if (row.collectionId?.trim()) {
+    lines.push(`回款ID：${row.collectionId.trim()}`);
+  }
+  if (row.operatorName?.trim()) {
+    lines.push(`操作人：${row.operatorName.trim()}`);
+  }
+  if (row.remark?.trim()) {
+    lines.push(`备注：${row.remark.trim()}`);
+  }
+  if (row.voucher?.trim()) {
+    lines.push(`凭证：${row.voucher.trim()}`);
+  }
+  return lines.join("\n");
+}
+
+function collectionDay(value: string | undefined): string {
+  const matched = value?.match(/^(\d{4}-\d{2}-\d{2})/);
+  return matched?.[1] ?? "";
+}
+
+function collectionStatusLabel(status: string | undefined): string {
+  const mapped: Record<string, string> = {
+    COLLECTING: "回款中",
+    COLLECTED: "已回款",
+  };
+  const raw = status?.trim() ?? "";
+  return raw ? mapped[raw] ?? raw : "未记录";
 }
 
 function noteSteps(order: OrderDoc, cursor: OrderCursor, realMail: boolean): StepDraft[] {

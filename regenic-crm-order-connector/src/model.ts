@@ -13,6 +13,22 @@ export interface FollowDoc {
   materialLinks?: string[];
 }
 
+export interface CollectionDoc {
+  /** 关联的客户回款记录。没有时用回款 ID 区分。 */
+  customerRecordId?: string;
+  /** paymentWorkflow.collectionRecords.collectionDate。 */
+  date?: string;
+  /** paymentWorkflow.collectionRecords.collectionAmount。 */
+  amount?: number | null;
+  method?: string;
+  collectionId?: string;
+  voucher?: string;
+  remark?: string;
+  operatorName?: string;
+  /** COLLECTING 回款中，COLLECTED 已回款。 */
+  status?: string;
+}
+
 export interface OrderDoc {
   id: string;
   projectId?: string;
@@ -51,6 +67,8 @@ export interface OrderDoc {
   reviewHandler?: string;
   reviewAt?: string;
   follows: FollowDoc[];
+  /** paymentWorkflow.collectionRecords。没有回款时是空数组。 */
+  collections?: CollectionDoc[];
 }
 
 export interface ProjectDoc {

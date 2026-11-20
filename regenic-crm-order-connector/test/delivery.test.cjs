@@ -1391,6 +1391,75 @@ test("an ended delivery thread is hidden once and shown again when it reopens", 
   }
 });
 
+test("collection records are written, revised, and removed with the order", async () => {
+  const row = {
+    customerRecordId: "cust-1",
+    date: "2026-11-02T00:00:00.000Z",
+    amount: 10000,
+    status: "COLLECTED",
+    method: "银行",
+    operatorName: "李四",
+    remark: "第一笔",
+  };
+  const cursor = { ...emptyOrderCursor(), stage: "live", face: 4, status: "FOLLOWING" };
+  const first = await advanceDelivery({
+    orderId: "a",
+    order: order({ collections: [row] }),
+    project: null,
+    store: emptyStore(),
+    cursor,
+    pageSize: 20,
+    now: "2026-11-06T10:00:00.000Z",
+  });
+  const created = first.records.find((record) => String(record.external_id).includes(":collect-"));
+  assert.equal(created.operation, "create");
+  assert.equal(recordSpeaker(created), "回款");
+  assert.match(recordText(created), /回款日期：2026-11-02/);
+  assert.match(recordText(created), /回款金额：10000/);
+  assert.match(recordText(created), /回款状态：已回款/);
+  assert.match(recordText(created), /回款方式：银行/);
+  assert.match(recordText(created), /操作人：李四/);
+
+  const quiet = await advanceDelivery({
+    orderId: "a",
+    order: order({ collections: [row] }),
+    project: null,
+    store: emptyStore(),
+    cursor: first.cursor,
+    pageSize: 20,
+    now: "2026-11-06T11:00:00.000Z",
+  });
+  assert.equal(quiet.records.some((record) => String(record.external_id).includes(":collect-")), false);
+
+  const changed = await advanceDelivery({
+    orderId: "a",
+    order: order({ collections: [{ ...row, amount: 8000, status: "COLLECTING" }] }),
+    project: null,
+    store: emptyStore(),
+    cursor: quiet.cursor,
+    pageSize: 20,
+    now: "2026-11-06T12:00:00.000Z",
+  });
+  const revised = changed.records.find((record) => String(record.external_id).includes(":collect-"));
+  assert.equal(revised.operation, "revise");
+  assert.equal(revised.external_id, created.external_id);
+  assert.match(recordText(revised), /回款金额：8000/);
+  assert.match(recordText(revised), /回款状态：回款中/);
+
+  const removed = await advanceDelivery({
+    orderId: "a",
+    order: order({ collections: [] }),
+    project: null,
+    store: emptyStore(),
+    cursor: changed.cursor,
+    pageSize: 20,
+    now: "2026-11-06T13:00:00.000Z",
+  });
+  const tomb = removed.records.find((record) => String(record.external_id).includes(":collect-"));
+  assert.equal(tomb.operation, "tombstone");
+  assert.equal(tomb.external_id, created.external_id);
+});
+
 function order(extra = {}) {
   return {
     id: "a",
