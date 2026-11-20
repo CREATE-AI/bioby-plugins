@@ -20,8 +20,7 @@ import { deliveryCursorKey, rememberDeliveryCursor, selectStoredCursor } from ".
 import { PROJECT_SOURCE, SOURCE, projectStreamKey, streamKey } from "./locators";
 import type { DeliveryStore, OrderDoc, ProjectDoc, ProjectInfoDoc, ProjectStore } from "./model";
 import { advanceProject, parseProjectCursor } from "./project-sync";
-import { isEndedStatus } from "./status";
-import { advanceDelivery, DELIVERY_LOG_TEXT_VERSION, parseOrderCursor } from "./sync";
+import { advanceDelivery, parseOrderCursor } from "./sync";
 import { settleEndedThread } from "./thread-fold";
 
 const runs = new Map<string, AbortController>();
@@ -343,7 +342,6 @@ export function startDeliveryPush(input: {
     concurrency: input.concurrency,
     source: SOURCE,
     list: input.listHeads,
-    skip: (row) => skipEndedOrder(input.installation.id, row.id, row.status),
     pushOne: async (row, signal) => {
       await pushPages({
         installation: input.installation,
@@ -367,9 +365,6 @@ export function startDeliveryPush(input: {
           });
         },
       });
-      await settleEndedThread(input.installation.id, row.id, row.status);
-    },
-    onSkip: async (row) => {
       await settleEndedThread(input.installation.id, row.id, row.status);
     },
   });
@@ -535,17 +530,6 @@ async function pushPages<T>(input: {
       return;
     }
   }
-}
-
-function skipEndedOrder(installationId: string, orderId: string, status: string | undefined): boolean {
-  if (!isEndedStatus(status)) {
-    return false;
-  }
-  const cursor = parseOrderCursor(selectStoredCursor(deliveryCursorKey(installationId, orderId), undefined));
-  return cursor.ended === true
-    && cursor.status === status
-    && (cursor.logText ?? 0) >= DELIVERY_LOG_TEXT_VERSION
-    && !cursor.fp["end-done"];
 }
 
 export async function submitPushBatch(

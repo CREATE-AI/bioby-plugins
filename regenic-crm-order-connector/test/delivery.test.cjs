@@ -1460,6 +1460,80 @@ test("collection records are written, revised, and removed with the order", asyn
   assert.equal(tomb.external_id, created.external_id);
 });
 
+test("an already ended order still writes collection records", async () => {
+  const settled = await advanceUntilSettled(order({ status: "ABANDONED", inDeliveryView: true }));
+  assert.equal(settled.cursor.ended, true);
+  const row = {
+    customerRecordId: "cust-ended",
+    date: "2026-11-02T00:00:00.000Z",
+    amount: 3000,
+    status: "COLLECTED",
+  };
+  const synced = await advanceDelivery({
+    orderId: "a",
+    order: order({ status: "ABANDONED", inDeliveryView: true, collections: [row] }),
+    project: null,
+    store: emptyStore(),
+    cursor: settled.cursor,
+    pageSize: 20,
+    now: "2026-11-06T11:00:00.000Z",
+  });
+  const created = synced.records.find((record) => String(record.external_id).includes(":collect-"));
+  assert.equal(created.operation, "create");
+  assert.match(recordText(created), /回款金额：3000/);
+});
+
+test("ended orders stay in the push loop", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "crm-push-ended-"));
+  setPushStateDir(dir);
+  setDeliveryCursorDir(dir);
+  resetDeliveryCursorMemory();
+  const id = `push-ended-${process.pid}`;
+  const read = [];
+  setThreadFoldClient({
+    async read() {
+      return { found: false, hidden: false, version: 0 };
+    },
+    async write() {
+      return "ok";
+    },
+  });
+  startDeliveryPush({
+    installation: {
+      id,
+      org_id: "local-owner",
+      connector_type: "crm-delivery-sync",
+      status: "enabled",
+      config: {},
+      created_at: "2026-11-20T00:00:00.000Z",
+      updated_at: "v1",
+    },
+    intervalMs: 60_000,
+    concurrency: 1,
+    pageSize: 1,
+    listHeads: async () => [{ id: "order-ended", status: "ABANDONED" }],
+    readOrder: async (orderId) => {
+      read.push(orderId);
+      return { order: null, project: null, store: emptyStore() };
+    },
+  });
+  try {
+    const started = Date.now();
+    while (read.length === 0 && Date.now() - started < 2000) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.deepEqual(read, ["order-ended"]);
+  } finally {
+    stopPush(id);
+    setThreadFoldClient();
+    resetDeliveryCursorMemory();
+    setDeliveryCursorDir(join(homedir(), ".regenic", "crm-delivery-cursors"));
+    setPushStateDir();
+    resetPushState();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function order(extra = {}) {
   return {
     id: "a",
