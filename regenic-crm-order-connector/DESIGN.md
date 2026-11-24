@@ -60,7 +60,7 @@ CRM 后端是 `bioby-email`，订单在 MongoDB 的 `project_fields`。前端 `b
 | `project_field_change_logs` | 订单变更日志，按 `projectFieldId` 查 |
 | `delivery_decision_items` | 决策事项。给客户/运营的话在 `askJson` 里 |
 
-订单上下文对照 `DeliveryOrderAgentInboxHistoryAssembler` 放进信封的 `projectOrderContext`：`projectName`、`briefUrl`、`briefType`、`briefText`、`brandProjectInfo`、`brandProjectInfoEnglish`、`demands`。再加上这张订单自己的达人昵称、平台、链接、对外报价、达人报价、结算方式（账期或预充值，没记就写未记录）、当前交付状态，以及所属项目的 `项目 ID` 和 `项目会话：crm-project:<项目id>`（见第 11 节）。有值才写这些链接：`脚本链接`（`finalScriptLink`，再加上脚本审核跟进和脚本审核材料里的链接）、`视频草稿链接`（视频草稿审核跟进的附件，以及视频草稿审核材料）、`发布链接`（`publishLinks`，没有列表时用 `publishLink`）。跟进正文下面会带上 `附件：`。已经同步过的订单，上下文会再改写一次，把这些链接补上；之后链接变了，会再追加一条上下文。有值才写 `选中备注`（`selectedWorkflow.selectedRemark`，客户怎么选的）。跟进弹窗里「仅供交付填写」的三项也写进来，给 DSH 砍价和谈判用：`内部砍价价格`（`targetBargainPrice`）、`合作权益`（`cooperationBenefitsManual` 为 true 时用订单的 `cooperationBenefits`，否则用项目 `benefits`，项目没有再用订单值）、`客户其他需求`（`customerOtherRequirements`）。这三项前面有一行「要和达人谈的条件（交付填写，不代表达人已同意）：」。它们是我们发邮件时带上的条件，不代表达人已经同意。这几项里的换行合成空格；空的项不参与比对，所以没填的旧订单不会多写一条上下文，填了或改了会追加一条。订单上的合作方式、交付物清单仍然不写进上下文。达人同意了什么，看会话里的往来邮件：说话人是「我们」的是我们发的，说话人是达人的是达人回的。服务费只出现在给运营看的步骤里，不写进给客户的通知。
+订单上下文对照 `DeliveryOrderAgentInboxHistoryAssembler` 放进信封的 `projectOrderContext`：`projectName`、`briefUrl`、`briefType`、`briefText`、`brandProjectInfo`、`brandProjectInfoEnglish`、`demands`。再加上这张订单自己的达人昵称、平台、链接、对外报价、达人报价、结算方式（账期或预充值，没记就写未记录）、当前交付状态，以及所属项目的 `项目 ID` 和 `项目会话：crm-project:<项目id>`（见第 11 节）。有值才写这些链接：`脚本链接`（`finalScriptLink`，再加上脚本审核跟进和脚本审核材料里的链接）、`视频草稿链接`（视频草稿审核跟进的附件，以及视频草稿审核材料）、`发布链接`（`publishLinks`，没有列表时用 `publishLink`）。跟进正文下面会带上 `附件：`。已经同步过的订单，上下文会再改写一次，把这些链接补上；之后链接变了，会再追加一条上下文。有值才写 `选中备注`（`selectedWorkflow.selectedRemark`，客户怎么选的）。跟进弹窗里「仅供交付填写」的三项也写进来，给 DSH 砍价和谈判用：`内部砍价价格`（`targetBargainPrice`）、`合作权益`（`cooperationBenefitsManual` 为 true 时用订单的 `cooperationBenefits`，否则用项目 `benefits`，项目没有再用订单值）、`客户其他需求`（`customerOtherRequirements`）。这三项前面有一行「要和达人谈的条件（交付填写，不代表达人已同意）：」。它们是我们发邮件时带上的条件，不代表达人已经同意。这几项里的换行合成空格；空的项不参与比对，所以没填的旧订单不会多写一条上下文，填了或改了会追加一条。订单上的合作方式、交付物清单仍然不写进上下文。达人同意了什么，看会话里的往来邮件：说话人是「我们」、「运营·某某」或「交付引擎」这类自动发信方的是我们发的，说话人是达人的是达人回的。服务费只出现在给运营看的步骤里，不写进给客户的通知。
 
 邮件对照订单详情页的「邮件和跟进」，查询方式和 `InfluencerCampaignReplyLookup.loadThread` 相同，再按 `DecisionContextLoader.thisOrder` 滤到这张单：
 
@@ -68,6 +68,11 @@ CRM 后端是 `bioby-email`，订单在 MongoDB 的 `project_fields`。前端 `b
 - 邮件上有 `projectFieldId` 时必须等于这张单；没有时才看是不是同一个 `campaignId`。
 - 详情页判断用的邮件最多 10 封、跟进最多 8 条。会话不按这个截断。第一次按时间分几页写完。
 - 增量检查用邮件 `sentDate` 或 `updatedTime` 晚于这张订单的水位，不把历史再全读一遍。
+- `SENT` 的信要写清楚是谁发的。邮件 `messageId` 去掉尖括号后，按下面的顺序找，找到第一个就用：
+  1. 这张单的跟进里有 `sent=true`、`sentEmailMessageId` 对得上的记录，而且是运营在订单页操作写的（`followerId` 是 `system:order_page`，或者不是 `system:` 开头）。说话人写「运营·<followerName>」。砍价中订单页上运营点的发信走这一条。
+  2. CRM 发信时记在 `outbound_email_sender` 的发信人。`automatic=true`（发信账号是 `system:` 开头）时说话人写记下的名字，例如「交付引擎」「DSH」「系统自动·排期发信」；否则写「运营·<名字>」。
+  3. 都找不到时仍写「我们」，正文不加发送方。改造前发的信、直接在 Gmail/Outlook 网页发的信都是这样。
+  找到时正文第一行是「发送方：<说话人>（自动发送）」或「（人工发送）」。这条规则上线时，已经同步过的订单会把邮件重读一遍，只改写说话人变了的那几封。
 
 跟进在 `selectedWorkflow.followUpRecords`，和邮件排在同一条时间线上。内容以「发送跟进邮件」或「已发送下单邮件」开头的，编号用 `<订单id>:note-auto-<正文指纹>`。当时还没有真实邮件，就留下。后来出现了 `INBOX` / `SPAM` / `SENT` 里的真邮件，对已经写过的这些自动备注发 `tombstone`，会话里不再留。
 
@@ -128,7 +133,7 @@ GitHub Actions 里，一次运行是一条时间线。每一步有固定名字�
 | 步骤 | 编号（`external_id`） | 时间 | 谁说的 |
 | --- | --- | --- | --- |
 | 订单上下文 | `<订单id>:context` | 订单 `createdTime`。项目后来改了 brief / 权益 / 需求，不改这条，另起一条 `<订单id>:context-<紧凑的项目更新时间>` | 系统 |
-| 一封邮件 | `<订单id>:mail-<邮件id>` | 邮件 `sentDate` | 达人回的记用户，我们发出的记助手 |
+| 一封邮件 | `<订单id>:mail-<邮件id>` | 邮件 `sentDate` | 达人回的记用户，我们发出的记助手；说话人按上面的发送方规则写 |
 | 一条跟进 | `<订单id>:note-<紧凑的跟进时间>-<跟进人>-<正文短指纹>` | `followTime` | 系统。跟进没有自己的 id。正文变了指纹会变，见 5.2：作废旧编号再写新的，不留两条 |
 | 一条回款 | `<订单id>:collect-<客户回款记录 id 或回款 ID>` | `collectionDate` | 说话人是「回款」。同一条记录改了就改这一条，删了就作废 |
 | 一条变更 | `<订单id>:log-<日志id>` | `logTime` | 系统。正文写操作人、原因、每个字段的旧值到新值 |

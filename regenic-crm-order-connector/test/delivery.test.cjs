@@ -814,6 +814,40 @@ test("a changed follow-up tombs the old step, and a real mail removes the auto n
   assert.match(recordText(mail), /正文/);
 });
 
+test("sent mail says who sent it: operator on the order page, the engine, an operator, or unknown", async () => {
+  const sent = (id, extra) => ({
+    id,
+    folder: "SENT",
+    subject: id,
+    content: "正文",
+    sentDate: "2026-11-06T08:00:00.000Z",
+    campaignId: "camp",
+    ...extra,
+  });
+  const page = await runUntilLive(order({
+    follows: [
+      { followTime: "2026-11-06T08:00:01.000Z", followerId: "system:order_page", followerName: "小王", followContent: "发了砍价信", sent: true, sentMessageId: "page@x.com" },
+      { followTime: "2026-11-06T08:00:02.000Z", followerId: "system:delivery_decision", followerName: "交付决策", followContent: "引擎发信", sent: true, sentMessageId: "engine@x.com" },
+    ],
+  }), project(), emptyStore({
+    mails: [
+      sent("m-page", { messageId: "page@x.com", sentBy: { name: "交付引擎", automatic: true } }),
+      sent("m-engine", { messageId: "engine@x.com", sentBy: { name: "交付引擎", automatic: true } }),
+      sent("m-ops", { messageId: "ops@x.com", sentBy: { name: "小李", automatic: false } }),
+      sent("m-old", { messageId: "old@x.com" }),
+    ],
+  }));
+  const mail = (id) => page.records.find((record) => record.external_id.includes(`:mail-${id}`));
+  assert.equal(recordSpeaker(mail("m-page")), "运营·小王");
+  assert.match(recordText(mail("m-page")), /^发送方：运营·小王（人工发送）/);
+  assert.equal(recordSpeaker(mail("m-engine")), "交付引擎");
+  assert.match(recordText(mail("m-engine")), /^发送方：交付引擎（自动发送）/);
+  assert.equal(recordSpeaker(mail("m-ops")), "运营·小李");
+  assert.match(recordText(mail("m-ops")), /^发送方：运营·小李（人工发送）/);
+  assert.equal(recordSpeaker(mail("m-old")), "我们");
+  assert.doesNotMatch(recordText(mail("m-old")), /发送方：/);
+});
+
 test("mail keeps the new text and drops the quoted history", async () => {
   const page = await runUntilLive(order(), project(), emptyStore({
     mails: [

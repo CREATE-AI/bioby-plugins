@@ -9,6 +9,7 @@ import {
   type FindOptions,
 } from "mongodb";
 import { decodeDocument } from "./stored-text";
+import { bareMessageId } from "./model";
 import type {
   CollectionDoc,
   DecisionDoc,
@@ -108,13 +109,16 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
         ...influencerMailScope(order),
         pageFilter(query, "sentDate"),
       ];
-      const rows = await (await db())
+      const database = await db();
+      const rows = await database
         .collection("emailInbox")
         .find({ $and: scope })
         .sort(query.since ? { sentDate: 1, _id: 1 } : { _id: 1 })
         .limit(limit)
         .toArray();
-      return pageOf(rows.map(mapMail), limit);
+      const mails = rows.map(mapMail);
+      await attachSenders(database, mails);
+      return pageOf(mails, limit);
     },
 
     async listLogs(orderId, query, limit) {
@@ -683,6 +687,9 @@ function mapOrder(row: Document): OrderDoc {
         attachmentUrls: stringsOf(follow.attachmentUrls),
         reviewType: stringOf(follow.deliveryCustomerReviewType),
         materialLinks: stringsOf(follow.deliveryCustomerReviewMaterialSnapshot),
+        followerId: stringOf(follow.followerId),
+        sent: follow.sent === true,
+        sentMessageId: bareMessageId(stringOf(follow.sentEmailMessageId)),
       };
     }),
   };
@@ -741,7 +748,40 @@ function mapMail(row: Document): MailDoc {
     htmlContent: stringOf(row.htmlContent),
     sentDate: iso(row.sentDate) ?? iso(row.receivedDate),
     updatedTime: iso(row.updatedTime),
+    messageId: bareMessageId(stringOf(row.messageId)),
   };
+}
+
+/** 已发送的信按 messageId 去 outbound_email_sender 查是谁发的。表还没有或查不到时不填。 */
+async function attachSenders(database: Db, mails: MailDoc[]): Promise<void> {
+  const sent = mails.filter((mail) => mail.messageId && (mail.folder ?? "").toUpperCase() === "SENT");
+  if (sent.length === 0) {
+    return;
+  }
+  const ids = [...new Set(sent.map((mail) => mail.messageId!))];
+  const rows = await database
+    .collection("outbound_email_sender")
+    .find(loose({ messageId: { $in: ids } }))
+    .project({ messageId: 1, sentByUserId: 1, sentByUserName: 1, automatic: 1 })
+    .toArray();
+  const byId = new Map<string, Document>();
+  for (const row of rows) {
+    const id = stringOf(row.messageId);
+    if (id) {
+      byId.set(id, row);
+    }
+  }
+  for (const mail of sent) {
+    const row = byId.get(mail.messageId!);
+    if (!row) {
+      continue;
+    }
+    const userId = stringOf(row.sentByUserId) ?? "";
+    mail.sentBy = {
+      name: stringOf(row.sentByUserName),
+      automatic: row.automatic === true || userId.toLowerCase().startsWith("system:"),
+    };
+  }
 }
 
 function mapLog(row: Document): LogDoc {

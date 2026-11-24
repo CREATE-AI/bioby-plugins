@@ -306,7 +306,7 @@ async function pullMails(
     cursor.mailRewind = "done";
     cursor.mailText = MAIL_TEXT_VERSION;
   }
-  const steps = page.items.filter((mail) => mailBelongs(mail, order)).map((mail) => mailStep(mail, order.nickname));
+  const steps = page.items.filter((mail) => mailBelongs(mail, order)).map((mail) => mailStep(mail, order));
   emit(order, label, cursor, records, steps);
   const last = page.items[page.items.length - 1];
   cursor.mailAfter = page.full && last ? last.id : null;
@@ -910,22 +910,64 @@ function noteSteps(order: OrderDoc, cursor: OrderCursor, realMail: boolean): Ste
   return steps;
 }
 
-function mailStep(mail: MailDoc, nickname?: string): StepDraft {
+function mailStep(mail: MailDoc, order: OrderDoc): StepDraft {
   const sent = (mail.folder ?? "").toUpperCase() === "SENT";
   const at = mail.sentDate || mail.updatedTime || new Date(0).toISOString();
-  const who = sent ? "我们" : (nickname?.trim() || mail.from?.trim() || "达人");
+  const sender = sent ? mailSender(mail, order.follows) : undefined;
+  const who = sent ? (sender?.label ?? "我们") : (order.nickname?.trim() || mail.from?.trim() || "达人");
   return {
     suffix: `mail-${stepToken(mail.id)}`,
     at,
     kind: "mail",
     actor: sent ? "assistant" : "user",
     speaker: who,
-    text: mailText(mail),
+    text: mailText(mail, sender),
   };
 }
 
-function mailText(mail: MailDoc): string {
+interface SenderLabel {
+  label: string;
+  automatic: boolean;
+}
+
+const ORDER_PAGE_FOLLOWER = "system:order_page";
+
+/** 运营在订单页操作发的信以跟进记录为准，其余看 CRM 发信时记的发信人。都没有时不标。 */
+function mailSender(mail: MailDoc, follows: FollowDoc[]): SenderLabel | undefined {
+  const operator = mail.messageId ? operatorOf(mail.messageId, follows) : undefined;
+  if (operator) {
+    return { label: `运营·${operator}`, automatic: false };
+  }
+  const recorded = mail.sentBy;
+  if (!recorded) {
+    return undefined;
+  }
+  const name = recorded.name?.trim();
+  if (recorded.automatic) {
+    return { label: name || "系统自动", automatic: true };
+  }
+  return { label: name ? `运营·${name}` : "运营", automatic: false };
+}
+
+function operatorOf(messageId: string, follows: FollowDoc[]): string | undefined {
+  for (const follow of follows) {
+    if (!follow.sent || follow.sentMessageId !== messageId) {
+      continue;
+    }
+    const followerId = follow.followerId?.trim().toLowerCase() ?? "";
+    const name = follow.followerName?.trim();
+    if (name && (followerId === ORDER_PAGE_FOLLOWER || !followerId.startsWith("system:"))) {
+      return name;
+    }
+  }
+  return undefined;
+}
+
+function mailText(mail: MailDoc, sender?: SenderLabel): string {
   const lines: string[] = [];
+  if (sender) {
+    lines.push(`发送方：${sender.label}（${sender.automatic ? "自动发送" : "人工发送"}）`);
+  }
   if (mail.from) {
     lines.push(`发件人：${mail.from}`);
   }
@@ -942,7 +984,7 @@ function mailText(mail: MailDoc): string {
   return lines.join("\n").trim() || "（空邮件）";
 }
 
-const MAIL_TEXT_VERSION = 2;
+const MAIL_TEXT_VERSION = 3;
 
 function readableMailBody(mail: MailDoc): string {
   const plain = latestMailText(mail.content);

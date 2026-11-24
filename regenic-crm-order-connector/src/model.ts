@@ -11,6 +11,11 @@ export interface FollowDoc {
   reviewType?: string;
   /** 这次审核当时用的材料链接。 */
   materialLinks?: string[];
+  /** 写跟进的账号。system:order_page 是运营在订单页操作，名字在 followerName；其他 system: 开头的是自动流程。 */
+  followerId?: string;
+  /** true 表示这条跟进真的发了信，sentMessageId 是那封信的 messageId（去掉尖括号）。 */
+  sent?: boolean;
+  sentMessageId?: string;
 }
 
 export interface CollectionDoc {
@@ -105,6 +110,21 @@ export interface MailDoc {
   htmlContent?: string;
   sentDate?: string;
   updatedTime?: string;
+  /** 去掉尖括号的 messageId。 */
+  messageId?: string;
+  /** CRM 发信时在 outbound_email_sender 记下的发信人。改造前发的信、直接在邮箱网页发的信没有。 */
+  sentBy?: MailSender;
+}
+
+export interface MailSender {
+  name?: string;
+  /** 发信账号是 system: 开头的，表示自动发信。 */
+  automatic: boolean;
+}
+
+export function bareMessageId(value: string | undefined): string | undefined {
+  const bare = value?.replace(/[<>]/g, "").trim();
+  return bare || undefined;
 }
 
 export interface FieldChangeDoc {
