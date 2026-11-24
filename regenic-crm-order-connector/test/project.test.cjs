@@ -310,6 +310,41 @@ test("order context includes script, draft and publish links", async () => {
   assert.match(recordText(note), /附件：https:\/\/example.com\/draft/);
 });
 
+test("order context shows the selected remark and writes again when it changes", async () => {
+  const store = {
+    async listMails() { return { items: [], full: false }; },
+    async listLogs() { return { items: [], full: false }; },
+    async listDecisions() { return { items: [], full: false }; },
+  };
+  const order = {
+    id: "a",
+    nickname: "小明",
+    status: "FOLLOWING",
+    inDeliveryView: true,
+    createdTime: "2026-11-01T00:00:00.000Z",
+    updatedTime: "2026-11-06T09:00:00.000Z",
+    follows: [],
+  };
+  const first = await advanceDelivery({
+    orderId: "a", order, project: null, store, cursor: emptyOrderCursor(), pageSize: 20, now: "2026-11-06T10:00:00.000Z",
+  });
+  const plain = first.records.find((record) => record.external_id === "a:context");
+  assert.doesNotMatch(recordText(plain), /选中备注/);
+
+  const again = await advanceDelivery({
+    orderId: "a", order, project: null, store, cursor: first.cursor, pageSize: 20, now: "2026-11-06T11:00:00.000Z",
+  });
+  assert.equal(again.records.some((record) => record.external_id.startsWith("a:context")), false);
+
+  const remarked = { ...order, selectedRemark: "推进\ntt+ig", updatedTime: "2026-11-07T09:00:00.000Z" };
+  const later = await advanceDelivery({
+    orderId: "a", order: remarked, project: null, store, cursor: again.cursor, pageSize: 20, now: "2026-11-07T10:00:00.000Z",
+  });
+  const changed = later.records.find((record) => record.external_id.startsWith("a:context-"));
+  assert.ok(changed);
+  assert.match(recordText(changed), /选中备注：推进 tt\+ig/);
+});
+
 function projectInfo(extra = {}) {
   return {
     id: "p1",

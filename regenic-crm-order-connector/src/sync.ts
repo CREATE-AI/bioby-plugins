@@ -1123,6 +1123,10 @@ function contextText(order: OrderDoc, project: ProjectDoc | null): string {
   if (order.deliveryOwner?.trim()) {
     lines.push(`交付跟进人：${order.deliveryOwner.trim()}`);
   }
+  const remark = selectedRemarkOf(order);
+  if (remark) {
+    lines.push(`选中备注：${remark}`);
+  }
   if (order.publishTime?.trim()) {
     lines.push(`发布时间：${order.publishTime.trim()}`);
   }
@@ -1148,6 +1152,7 @@ const DRAFT_STATUSES = new Set(["VIDEO_DRAFT_REVIEWING", "VIDEO_DRAFT_REVISING"]
 const SCRIPT_STATUSES = new Set(["SCRIPT_REVIEWING", "SCRIPT_REVISING", "WAITING_SCRIPT"]);
 
 function contextFingerprint(order: OrderDoc, project: ProjectDoc | null): unknown {
+  const remark = selectedRemarkOf(order);
   return {
     project: projectFingerprint(project),
     script: scriptLinks(order),
@@ -1155,7 +1160,14 @@ function contextFingerprint(order: OrderDoc, project: ProjectDoc | null): unknow
     publish: linkList(order.publishLinks),
     owner: order.deliveryOwner ?? "",
     published: order.publishTime ?? "",
+    // 没有备注时不放这个键。否则已同步过的订单会因为多了一个空键，全部再写一条订单消息。
+    ...(remark ? { remark } : {}),
   };
+}
+
+/** 订单消息一行一项，备注里的换行合成空格。 */
+function selectedRemarkOf(order: OrderDoc): string {
+  return order.selectedRemark?.replace(/\s*\n\s*/g, " ").trim() ?? "";
 }
 
 function scriptLinks(order: OrderDoc): string[] {

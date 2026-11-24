@@ -55,6 +55,8 @@ export interface OrderDoc {
   publishLinks?: string[];
   /** deliveryOperationsUserName，没有时用 selectedWorkflow.currentFollowerName。 */
   deliveryOwner?: string;
+  /** selectedWorkflow.selectedRemark。客户怎么选的：直接下单还是砍价，合作平台和形式。 */
+  selectedRemark?: string;
   /** selectedWorkflow.publishTime。 */
   publishTime?: string;
   isDeleted?: boolean;

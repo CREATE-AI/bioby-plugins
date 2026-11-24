@@ -656,6 +656,7 @@ function mapOrder(row: Document): OrderDoc {
       ? stringsOf(workflow?.publishLinks)
       : stringsOf(workflow?.publishLink),
     deliveryOwner: stringOf(row.deliveryOperationsUserName) ?? stringOf(workflow?.currentFollowerName),
+    selectedRemark: stringOf(workflow?.selectedRemark),
     publishTime: iso(workflow?.publishTime),
     isDeleted: row.isDeleted === true,
     createdTime: iso(row.createdTime),
