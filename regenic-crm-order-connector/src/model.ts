@@ -42,6 +42,12 @@ export interface OrderDoc {
   /** 账期 ACCOUNT_PERIOD，或预充值 PREPAID。空着表示订单没记。 */
   settlementMethod?: string;
   cooperationBenefits?: string;
+  /** true 时合作权益以订单为准；否则用项目 benefits，项目没有再用订单值。 */
+  cooperationBenefitsManual?: boolean;
+  /** 内部砍价价格，直接发给达人的砍价价，例如 600 USD。 */
+  targetBargainPrice?: string;
+  /** 客户其他需求，例如时长要求。 */
+  customerOtherRequirements?: string;
   bargainServiceFeeUsd?: number | null;
   bargainValueAddedFeeUsd?: number | null;
   status?: string;

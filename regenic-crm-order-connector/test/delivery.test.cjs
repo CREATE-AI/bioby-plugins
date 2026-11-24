@@ -887,9 +887,8 @@ test("stored system steps are rewritten with a readable speaker", async () => {
   assert.match(recordText(context), /结算方式：未记录/);
   assert.doesNotMatch(recordText(context), /交付跟进人：/);
   assert.doesNotMatch(recordText(context), /发布时间：/);
-  assert.doesNotMatch(recordText(context), /合作权益：/);
+  assert.match(recordText(context), /要和达人谈的条件（交付填写，不代表达人已同意）：\n合作权益：权益/);
   assert.doesNotMatch(recordText(context), /交付物：/);
-  assert.doesNotMatch(recordText(context), /权益：权益/);
   const prepaid = await advanceDelivery({
     orderId: "a",
     order: order({ settlementMethod: "PREPAID" }),

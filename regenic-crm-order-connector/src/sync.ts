@@ -1123,9 +1123,22 @@ function contextText(order: OrderDoc, project: ProjectDoc | null): string {
   if (order.deliveryOwner?.trim()) {
     lines.push(`交付跟进人：${order.deliveryOwner.trim()}`);
   }
-  const remark = selectedRemarkOf(order);
-  if (remark) {
-    lines.push(`选中备注：${remark}`);
+  const terms = dealTerms(order, project);
+  if (terms.remark) {
+    lines.push(`选中备注：${terms.remark}`);
+  }
+  if (terms.bargain || terms.benefits || terms.needs) {
+    // 这几项是我们发信时带的条件。写明不代表达人已同意，免得审核规则当成已经谈妥。
+    lines.push("要和达人谈的条件（交付填写，不代表达人已同意）：");
+  }
+  if (terms.bargain) {
+    lines.push(`内部砍价价格：${terms.bargain}`);
+  }
+  if (terms.benefits) {
+    lines.push(`合作权益：${terms.benefits}`);
+  }
+  if (terms.needs) {
+    lines.push(`客户其他需求：${terms.needs}`);
   }
   if (order.publishTime?.trim()) {
     lines.push(`发布时间：${order.publishTime.trim()}`);
@@ -1152,7 +1165,7 @@ const DRAFT_STATUSES = new Set(["VIDEO_DRAFT_REVIEWING", "VIDEO_DRAFT_REVISING"]
 const SCRIPT_STATUSES = new Set(["SCRIPT_REVIEWING", "SCRIPT_REVISING", "WAITING_SCRIPT"]);
 
 function contextFingerprint(order: OrderDoc, project: ProjectDoc | null): unknown {
-  const remark = selectedRemarkOf(order);
+  const terms = dealTerms(order, project);
   return {
     project: projectFingerprint(project),
     script: scriptLinks(order),
@@ -1160,14 +1173,35 @@ function contextFingerprint(order: OrderDoc, project: ProjectDoc | null): unknow
     publish: linkList(order.publishLinks),
     owner: order.deliveryOwner ?? "",
     published: order.publishTime ?? "",
-    // 没有备注时不放这个键。否则已同步过的订单会因为多了一个空键，全部再写一条订单消息。
-    ...(remark ? { remark } : {}),
+    // 空的项不放键。否则已同步过、这几项都没填的订单，会因为多了空键全部再写一条订单消息。
+    ...(terms.remark ? { remark: terms.remark } : {}),
+    ...(terms.bargain ? { bargain: terms.bargain } : {}),
+    ...(terms.benefits ? { benefits: terms.benefits } : {}),
+    ...(terms.needs ? { needs: terms.needs } : {}),
   };
 }
 
-/** 订单消息一行一项，备注里的换行合成空格。 */
-function selectedRemarkOf(order: OrderDoc): string {
-  return order.selectedRemark?.replace(/\s*\n\s*/g, " ").trim() ?? "";
+/** 跟进弹窗里交付填的几项。DSH 砍价和谈判时要看。 */
+function dealTerms(order: OrderDoc, project: ProjectDoc | null): {
+  remark: string;
+  bargain: string;
+  benefits: string;
+  needs: string;
+} {
+  const benefits = order.cooperationBenefitsManual
+    ? order.cooperationBenefits
+    : project?.benefits?.trim() || order.cooperationBenefits;
+  return {
+    remark: oneLine(order.selectedRemark),
+    bargain: oneLine(order.targetBargainPrice),
+    benefits: oneLine(benefits),
+    needs: oneLine(order.customerOtherRequirements),
+  };
+}
+
+/** 订单消息一行一项，换行合成空格。 */
+function oneLine(value: string | undefined): string {
+  return value?.replace(/\s*\n\s*/g, " ").trim() ?? "";
 }
 
 function scriptLinks(order: OrderDoc): string[] {

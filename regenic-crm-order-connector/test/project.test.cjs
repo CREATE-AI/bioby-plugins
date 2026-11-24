@@ -345,6 +345,48 @@ test("order context shows the selected remark and writes again when it changes",
   assert.match(recordText(changed), /选中备注：推进 tt\+ig/);
 });
 
+test("order context carries the bargain price, benefits and other needs for DSH", async () => {
+  const store = {
+    async listMails() { return { items: [], full: false }; },
+    async listLogs() { return { items: [], full: false }; },
+    async listDecisions() { return { items: [], full: false }; },
+  };
+  const project = { id: "p1", name: "春季", benefits: "90-day bio link\nfull copyright" };
+  const order = {
+    id: "a",
+    projectId: "p1",
+    nickname: "小明",
+    status: "FOLLOWING",
+    inDeliveryView: true,
+    createdTime: "2026-11-01T00:00:00.000Z",
+    updatedTime: "2026-11-06T09:00:00.000Z",
+    follows: [],
+  };
+  const run = (input, cursor = emptyOrderCursor()) => advanceDelivery({
+    orderId: "a", order: input, project, store, cursor, pageSize: 20, now: "2026-11-06T10:00:00.000Z",
+  });
+
+  const filled = await run({
+    ...order,
+    targetBargainPrice: "600 USD",
+    cooperationBenefits: "旧的订单权益",
+    customerOtherRequirements: "视频 60 秒以上",
+  });
+  const text = recordText(filled.records.find((record) => record.external_id === "a:context"));
+  assert.match(text, /内部砍价价格：600 USD/);
+  assert.match(text, /合作权益：90-day bio link full copyright/);
+  assert.match(text, /客户其他需求：视频 60 秒以上/);
+
+  const manual = await run({ ...order, cooperationBenefits: "1 条 TikTok", cooperationBenefitsManual: true });
+  assert.match(recordText(manual.records.find((record) => record.external_id === "a:context")), /合作权益：1 条 TikTok/);
+
+  const bare = await run(order, emptyOrderCursor());
+  const bareText = recordText(bare.records.find((record) => record.external_id === "a:context"));
+  assert.doesNotMatch(bareText, /内部砍价价格|客户其他需求/);
+  const repeat = await run(order, bare.cursor);
+  assert.equal(repeat.records.some((record) => record.external_id.startsWith("a:context")), false);
+});
+
 function projectInfo(extra = {}) {
   return {
     id: "p1",
