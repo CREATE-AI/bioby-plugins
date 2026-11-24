@@ -848,6 +848,46 @@ test("sent mail says who sent it: operator on the order page, the engine, an ope
   assert.doesNotMatch(recordText(mail("m-old")), /发送方：/);
 });
 
+test("a mail re-read cut short by an upgrade reads again so the early pages get the new sender", async () => {
+  const sent = (id, sentBy) => ({
+    id,
+    folder: "SENT",
+    subject: id,
+    content: "正文",
+    sentDate: "2026-11-06T08:00:00.000Z",
+    campaignId: "camp",
+    messageId: `${id}@x.com`,
+    sentBy,
+  });
+  const before = await runUntilLive(order(), project(), emptyStore({ mails: [sent("m1"), sent("m2")] }));
+  const cursor = parseOrderCursor(JSON.stringify(before.cursor));
+  cursor.mailText = 2;
+  cursor.mailRewind = "started";
+  cursor.mailAfter = "m1";
+  delete cursor.mailRewindText;
+  const store = emptyStore({
+    mails: [sent("m1", { name: "交付引擎", automatic: true }), sent("m2", { name: "交付引擎", automatic: true })],
+  });
+  const step = (current) => advanceDelivery({
+    orderId: "a",
+    order: order(),
+    project: project(),
+    store,
+    cursor: current,
+    pageSize: 20,
+    now: "2026-11-06T10:00:00.000Z",
+  });
+  const finishOld = await step(cursor);
+  const touched = (result, id) => result.records.some((record) => record.external_id.includes(`:mail-${id}`));
+  assert.equal(touched(finishOld, "m1"), false);
+  assert.equal(touched(finishOld, "m2"), true);
+  const again = await step(parseOrderCursor(JSON.stringify(finishOld.cursor)));
+  const m1 = again.records.find((record) => record.external_id.includes(":mail-m1"));
+  assert.equal(m1?.operation, "revise");
+  assert.equal(recordSpeaker(m1), "交付引擎");
+  assert.equal(touched(again, "m2"), false);
+});
+
 test("mail keeps the new text and drops the quoted history", async () => {
   const page = await runUntilLive(order(), project(), emptyStore({
     mails: [

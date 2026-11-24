@@ -46,6 +46,8 @@ export interface OrderCursor {
   mailRewind?: "started" | "done";
   /** 邮件正文去掉历史引用后，已同步过的旧邮件要再读一遍。 */
   mailText?: number;
+  /** 这一轮从头读邮件开始时的写法版本。读到一半换了版本，前面几页是旧写法，读完要再读一遍。 */
+  mailRewindText?: number;
   decisionRewind?: "started" | "done";
   /** 变更记录改成可读的 AI 内审之后，旧记录要再读一遍。 */
   logRewind?: "started" | "done";
@@ -286,13 +288,10 @@ async function pullMails(
     cursor.mailAfter = null;
     return false;
   }
-  if ((cursor.mailText ?? 0) < MAIL_TEXT_VERSION && cursor.mailRewind === "done") {
+  if (((cursor.mailText ?? 0) < MAIL_TEXT_VERSION && cursor.mailRewind === "done") || !cursor.mailRewind) {
     cursor.mailAfter = null;
     cursor.mailRewind = "started";
-  }
-  if (!cursor.mailRewind) {
-    cursor.mailAfter = null;
-    cursor.mailRewind = "started";
+    cursor.mailRewindText = MAIL_TEXT_VERSION;
   }
   const page = await input.store.listMails(
     order,
@@ -304,7 +303,8 @@ async function pullMails(
   );
   if (!page.full) {
     cursor.mailRewind = "done";
-    cursor.mailText = MAIL_TEXT_VERSION;
+    cursor.mailText = cursor.mailRewindText ?? 0;
+    delete cursor.mailRewindText;
   }
   const steps = page.items.filter((mail) => mailBelongs(mail, order)).map((mail) => mailStep(mail, order));
   emit(order, label, cursor, records, steps);
