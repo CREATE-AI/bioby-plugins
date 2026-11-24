@@ -145,6 +145,8 @@ export interface OpenOrderHead {
   projectName?: string;
   bloggerLink?: string;
   status?: string;
+  /** 和 OrderDoc.deliveryOwner 取法一样。 */
+  deliveryOwner?: string;
 }
 
 export interface IdPage<T> {

@@ -723,20 +723,27 @@ async function cachedOrderOptions(saved: { uri: string; db: string }, brandIds: 
   return options;
 }
 
-function chooserLabel(row: OpenOrderHead): string {
+export function chooserLabel(row: OpenOrderHead): string {
   const nick = row.nickname?.trim();
   const project = row.projectName?.trim();
   const name = nick && project ? `${nick} · ${project}` : nick || project || row.id;
-  const link = row.bloggerLink?.trim().replace(/^https?:\/\//, "");
-  if (!link) {
-    return name;
+  const owner = row.deliveryOwner?.trim();
+  const parts = [name];
+  if (owner) {
+    parts.push(`交付：${owner}`);
   }
-  const shown = link.length > 48 ? `${link.slice(0, 45)}…` : link;
-  return `${name} · ${shown}`;
+  const link = row.bloggerLink?.trim().replace(/^https?:\/\//, "");
+  if (link) {
+    parts.push(link.length > 48 ? `${link.slice(0, 45)}…` : link);
+  }
+  return parts.join(" · ");
 }
 
 function chooserTitle(row: OpenOrderHead): string {
-  return [row.nickname, row.projectName, row.bloggerLink].filter((item) => item?.trim()).join(" ");
+  const owner = row.deliveryOwner?.trim();
+  return [row.nickname, row.projectName, owner ? `交付：${owner}` : undefined, row.bloggerLink]
+    .filter((item) => item?.trim())
+    .join(" ");
 }
 
 /** 表单里已经记住的编号。这一页没带时，再用上次保存的安装配置。 */

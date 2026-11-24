@@ -12,6 +12,7 @@ const {
   pageSelectedHeads,
 } = require("../dist/directory");
 const {
+  chooserLabel,
   connectionFromFormValues,
   crmDeliverySyncDriver,
   deliveryPollHint,
@@ -112,6 +113,19 @@ test("brand ids keep one copy and paging can search", () => {
     { value: "3", label: { literal: "伽马" } },
   ], "贝", undefined, 50, ["3"]);
   assert.deepEqual(searched.options.map((option) => option.value), ["2"]);
+});
+
+test("the order chooser shows the delivery owner and can search by that name", () => {
+  const rows = [
+    { id: "1", nickname: "小明", projectName: "春季", deliveryOwner: "张三", bloggerLink: "https://example.com/a" },
+    { id: "2", nickname: "小红", projectName: "春季", deliveryOwner: "李四" },
+    { id: "3", nickname: "小刚", projectName: "夏季" },
+  ];
+  assert.equal(chooserLabel(rows[0]), "小明 · 春季 · 交付：张三 · example.com/a");
+  assert.equal(chooserLabel(rows[1]), "小红 · 春季 · 交付：李四");
+  assert.equal(chooserLabel(rows[2]), "小刚 · 夏季");
+  const options = rows.map((row) => ({ value: row.id, label: { literal: chooserLabel(row) } }));
+  assert.deepEqual(pageChoices(options, "李四", undefined, 50).options.map((option) => option.value), ["2"]);
 });
 
 test("push progress counts orders that already have a conversation", () => {

@@ -211,7 +211,9 @@ const ORDER_HEAD_FIELDS = {
   nickname: 1,
   projectId: 1,
   bloggerLink: 1,
+  deliveryOperationsUserName: 1,
   "selectedWorkflow.status": 1,
+  "selectedWorkflow.currentFollowerName": 1,
 };
 
 const ORDER_ROW_FIELDS = {
@@ -497,13 +499,17 @@ async function withProjects(database: Db, rows: Document[]): Promise<OpenOrderHe
       }
     }
   }
-  return rows.map((row): OpenOrderHead => ({
-    id: idOf(row._id),
-    nickname: stringOf(row.nickname),
-    projectName: names.get(stringOf(row.projectId) ?? ""),
-    bloggerLink: stringOf(row.bloggerLink),
-    status: stringOf(asRecord(row.selectedWorkflow)?.status),
-  }));
+  return rows.map((row): OpenOrderHead => {
+    const workflow = asRecord(row.selectedWorkflow);
+    return {
+      id: idOf(row._id),
+      nickname: stringOf(row.nickname),
+      projectName: names.get(stringOf(row.projectId) ?? ""),
+      bloggerLink: stringOf(row.bloggerLink),
+      status: stringOf(workflow?.status),
+      deliveryOwner: stringOf(row.deliveryOperationsUserName) ?? stringOf(workflow?.currentFollowerName),
+    };
+  });
 }
 
 function openFilter(
