@@ -977,7 +977,7 @@ test("stored system steps are rewritten with a readable speaker", async () => {
   const ops = page.records.find((record) => record.external_id.endsWith("-ops"));
   assert.equal(ops.operation, "revise");
   assert.equal(recordSpeaker(ops), "给运营");
-  assert.equal(page.cursor.face, 4);
+  assert.equal(page.cursor.face, 5);
 });
 
 test("an old summary is removed and a later round does not add one", async () => {
@@ -1216,7 +1216,7 @@ test("older influencer mail is read once even when the live watermark is already
   assert.equal(page.cursor.mailRewind, "done");
 });
 
-test("a changed project brief appends a context step", async () => {
+test("a changed project brief revises the one order context card", async () => {
   const first = await runUntilLive(order(), project({ briefText: "旧 brief" }));
   assert.equal(first.records.some((record) => record.external_id.endsWith(":context")), true);
   const second = await advanceDelivery({
@@ -1228,8 +1228,52 @@ test("a changed project brief appends a context step", async () => {
     pageSize: 20,
     now: "2026-11-06T13:00:00.000Z",
   });
-  assert.equal(second.records.some((record) => record.external_id.includes(":context-")), true);
-  assert.equal(second.records.some((record) => record.operation === "revise" && record.external_id.endsWith(":context")), false);
+  const revised = second.records.find((record) => record.operation === "revise" && record.external_id.endsWith(":context"));
+  assert.ok(revised);
+  assert.match(recordText(revised), /brief：新 brief/);
+  assert.equal(second.records.some((record) => record.external_id.includes(":context-")), false);
+});
+
+test("an extra order context card is removed and folded back into the original", async () => {
+  const cursor = {
+    ...emptyOrderCursor(),
+    stage: "live",
+    face: 4,
+    status: "FOLLOWING",
+    projectFp: "stale",
+    fp: {
+      context: "old",
+      "context-20261124060538298": "old-extra",
+    },
+  };
+  const page = await advanceDelivery({
+    orderId: "a",
+    order: order({ selectedRemark: "直接推进", targetBargainPrice: "250 USD" }),
+    project: project(),
+    store: emptyStore(),
+    cursor,
+    pageSize: 20,
+    now: "2026-11-07T10:00:00.000Z",
+  });
+  const dropped = page.records.find((record) => record.external_id.includes(":context-"));
+  assert.equal(dropped.operation, "tombstone");
+  const card = page.records.find((record) => record.external_id.endsWith(":context") && record.operation !== "tombstone");
+  assert.equal(card.operation, "revise");
+  assert.match(recordText(card), /选中备注：直接推进/);
+  assert.match(recordText(card), /内部砍价价格：250 USD/);
+  assert.equal(page.cursor.fp["context-20261124060538298"], undefined);
+  assert.equal(page.records.filter((record) => String(record.external_id).includes(":context") && record.operation !== "tombstone").length, 1);
+
+  const again = await advanceDelivery({
+    orderId: "a",
+    order: order({ selectedRemark: "直接推进", targetBargainPrice: "250 USD" }),
+    project: project(),
+    store: emptyStore(),
+    cursor: page.cursor,
+    pageSize: 20,
+    now: "2026-11-07T11:00:00.000Z",
+  });
+  assert.equal(again.records.some((record) => String(record.external_id).includes(":context")), false);
 });
 
 test("poll hint stays in backfill until the order page is finished", () => {

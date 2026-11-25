@@ -266,7 +266,7 @@ test("an order conversation written before the project link gets its context rew
   const context = advanced.records.find((record) => record.external_id === "a:context");
   assert.equal(context.operation, "revise");
   assert.match(recordText(context), /项目会话：crm-project:p1/);
-  assert.equal(advanced.cursor.face, 4);
+  assert.equal(advanced.cursor.face, 5);
 });
 
 test("order context includes script, draft and publish links", async () => {
@@ -310,7 +310,7 @@ test("order context includes script, draft and publish links", async () => {
   assert.match(recordText(note), /附件：https:\/\/example.com\/draft/);
 });
 
-test("order context shows the selected remark and writes again when it changes", async () => {
+test("order context shows the selected remark and revises the same card when it changes", async () => {
   const store = {
     async listMails() { return { items: [], full: false }; },
     async listLogs() { return { items: [], full: false }; },
@@ -340,9 +340,10 @@ test("order context shows the selected remark and writes again when it changes",
   const later = await advanceDelivery({
     orderId: "a", order: remarked, project: null, store, cursor: again.cursor, pageSize: 20, now: "2026-11-07T10:00:00.000Z",
   });
-  const changed = later.records.find((record) => record.external_id.startsWith("a:context-"));
-  assert.ok(changed);
+  const changed = later.records.find((record) => record.external_id === "a:context");
+  assert.equal(changed.operation, "revise");
   assert.match(recordText(changed), /选中备注：推进 tt\+ig/);
+  assert.equal(later.records.some((record) => record.external_id.includes(":context-")), false);
 });
 
 test("order context carries the bargain price, benefits and other needs for DSH", async () => {

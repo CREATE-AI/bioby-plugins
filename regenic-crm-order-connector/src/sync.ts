@@ -140,6 +140,7 @@ export async function advanceDelivery(input: {
   ) {
     const records: IngestRecord[] = [];
     const label = conversationLabel(order, input.project);
+    upgradeContextCard(order, input.project, cursor, records);
     emit(order, label, cursor, records, collectionSteps(order, cursor));
     dropEndNote(order, input.project, cursor, records, input.now);
     return { records, cursor, hasMore: false, wroteEnd: true };
@@ -169,6 +170,7 @@ export async function advanceDelivery(input: {
     }
     cursor.face = 4;
   }
+  upgradeContextCard(order, input.project, cursor, records);
   let hasMore = false;
   let wroteEnd = false;
   let guard = 0;
@@ -655,28 +657,68 @@ function contextSteps(
     if (laterOnly) {
       return [];
     }
-    return [{
-      suffix: "context",
-      at,
-      kind: "context",
-      actor: "assistant",
-      speaker: "订单",
-      text: contextText(order, project),
-    }];
+    return [contextCard(order, project, at)];
   }
   if (cursor.projectFp === fp) {
     return [];
   }
   cursor.projectFp = fp;
-  const changedAt = project?.updatedTime || order.updatedTime || at;
-  return [{
-    suffix: `context-${compactTime(changedAt)}`,
-    at: changedAt,
+  return [contextCard(order, project, at)];
+}
+
+/** 完整订单卡片只有 :context。以前按更新时间另起的卡片作废，内容收回这一条。 */
+function upgradeContextCard(
+  order: OrderDoc,
+  project: ProjectDoc | null,
+  cursor: OrderCursor,
+  records: IngestRecord[],
+): void {
+  if ((cursor.face ?? 0) >= 5) {
+    return;
+  }
+  const steps = collapseExtraContext(order, project, cursor);
+  if (steps.length > 0) {
+    emit(order, conversationLabel(order, project), cursor, records, steps);
+    cursor.projectFp = shortHash(JSON.stringify(contextFingerprint(order, project)));
+  }
+  cursor.face = 5;
+}
+
+function collapseExtraContext(
+  order: OrderDoc,
+  project: ProjectDoc | null,
+  cursor: OrderCursor,
+): StepDraft[] {
+  const at = order.createdTime || order.updatedTime || new Date(0).toISOString();
+  const steps: StepDraft[] = [];
+  for (const suffix of Object.keys(cursor.fp)) {
+    if (suffix.startsWith("context-")) {
+      steps.push({
+        suffix,
+        at,
+        kind: "context",
+        actor: "assistant",
+        speaker: "订单",
+        text: "",
+        tombstone: true,
+      });
+    }
+  }
+  if (cursor.fp.context || steps.length > 0) {
+    steps.push(contextCard(order, project, at));
+  }
+  return steps;
+}
+
+function contextCard(order: OrderDoc, project: ProjectDoc | null, at: string): StepDraft {
+  return {
+    suffix: "context",
+    at,
     kind: "context",
     actor: "assistant",
     speaker: "订单",
     text: contextText(order, project),
-  }];
+  };
 }
 
 /** 订单上下文加了所属项目。已经写过的上下文重写一次，规则才能顺着它找到项目会话。 */
