@@ -341,9 +341,9 @@ GitHub Actions 里，一次运行是一条时间线。每一步有固定名字�
 | --- | --- | --- | --- |
 | `mongo_uri` | 普通配置 | 无 | MongoDB 连接串 |
 | `mongo_db` | 普通配置 | 连接串里的库名 | 库名 |
-| `selection` | 普通配置 | `recent` | 没选项目时：`recent` 按创建时间取最新的，`all` 全部没删除的 |
-| `project_ids` | 普通配置 | 空 | 选了就只同步这些品牌下的这些项目，以及它们的交付订单。不再套「最新 N 个」。空着就按 `selection` 收 |
-| `recent_limit` | 普通配置 | `30` | 没选项目、且 `selection` 为 `recent` 时取多少个，最多 600 |
+| `selection` | 普通配置 | `recent` | `pick` 自己勾选，`recent` 按创建时间取最新的，`all` 全部没删除的。三种只生效一种 |
+| `project_ids` | 普通配置 | 空 | 只在 `selection` 为 `pick` 时使用。只同步这些品牌下勾中的项目，以及它们的交付订单 |
+| `recent_limit` | 普通配置 | `30` | 只在 `selection` 为 `recent` 时使用，最多 600 |
 | `refresh_interval_ms` | 普通配置 | `300000` | 同一个项目两次检查的间隔 |
 
 名单和生产一样，只收 `isDeleted` 正好是 `false` 的项目。字段空着或不是 `false` 的，按删除收尾。暂停、结束、品牌端删除（`brandDeleted`）只要 `isDeleted` 仍是 `false`，照样同步。选「全部」时安装表单先让人确认。目录一次最多交 5000 个没删除的项目，不再按十几个一页慢慢翻。已经收过的留在名单里，这次没见过的补上。超过 5000 个时，下一页再交剩下的。

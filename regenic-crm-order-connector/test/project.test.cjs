@@ -22,12 +22,13 @@ test("project install keeps newest by default and only offers newest or all", ()
   const all = projectInstallConfig({ mongo_db: "crm", selection: "all" });
   assert.equal(all.selection, "all");
   assert.equal(all.recent_limit, undefined);
-  assert.equal(projectSelectionOf({ selection: "pick" }), "recent");
+  assert.equal(projectSelectionOf({ selection: "pick" }), "pick");
+  assert.equal(projectSelectionOf({ selection: "nope" }), "recent");
   assert.throws(() => projectInstallConfig({ mongo_uri: "http://x" }), /连接串/);
   const catalog = crmProjectSyncDriver.installCatalog();
   assert.equal(catalog.form_version, 2);
   const selection = catalog.fields.find((field) => field.key === "selection");
-  assert.deepEqual(selection.options.map((option) => option.value), ["recent", "all"]);
+  assert.deepEqual(selection.options.map((option) => option.value), ["pick", "recent", "all"]);
   assert.equal(selection.default, "recent");
   assert.equal(catalog.fields.find((field) => field.key === "mongo_uri").widget, "text");
   assert.equal(catalog.fields.find((field) => field.key === "mongo_uri").secret, undefined);
@@ -36,16 +37,31 @@ test("project install keeps newest by default and only offers newest or all", ()
   assert.equal(brands.widget, "multi_select");
   const projects = catalog.fields.find((field) => field.key === "project_ids");
   assert.equal(projects.widget, "multi_select");
-  assert.equal(projects.required, false);
+  assert.equal(projects.required, true);
+  assert.deepEqual(projects.visible_when, { field: "selection", value: "pick" });
   assert.deepEqual(projects.options_depends_on, ["mongo_uri", "mongo_db", "brand_ids"]);
+  assert.throws(() => projectInstallConfig({
+    mongo_uri: "mongodb://localhost:27017/crm",
+    selection: "pick",
+  }), /至少选一个项目/);
   const scoped = projectInstallConfig({
     mongo_uri: "mongodb://localhost:27017/crm",
+    selection: "pick",
     brand_ids: ["b1"],
     project_ids: ["p1", "p1", " p2 "],
     project_names: "春季,夏季",
+    recent_limit: 20,
   });
+  assert.equal(scoped.selection, "pick");
   assert.deepEqual(scoped.project_ids, ["p1", "p2"]);
   assert.deepEqual(scoped.project_names, ["春季", "夏季"]);
+  assert.equal(scoped.recent_limit, undefined);
+  const recent = projectInstallConfig({
+    mongo_uri: "mongodb://localhost:27017/crm",
+    selection: "recent",
+    project_ids: ["p1"],
+  });
+  assert.deepEqual(recent.project_ids, []);
   assert.equal(catalog.install_confirm.when.value, "all");
 });
 
