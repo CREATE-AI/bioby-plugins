@@ -123,9 +123,8 @@ export const crmProjectSyncDriver: ChannelDriver = {
           const store = await openProjectStore(installation, host);
           const mode = projectSelectionOf(installation.config);
           const brands = brandIdsOf(installation.config);
-          const projects = projectIdsOf(installation.config);
-          const limit = mode === "recent" ? projectRecentOf(installation.config) : null;
-          const key = `${mode}:${limit ?? ""}:${brands.join(",")}:${projects.join(",")}`;
+          const scope = projectListArgs(installation.config);
+          const key = `${mode}:${scope.limit ?? ""}:${brands.join(",")}:${scope.projectIds.join(",")}`;
           return await listDirectoryPage<ProjectHead>({
             cursor,
             concurrency: PROJECT_DIRECTORY_PAGE,
@@ -137,7 +136,9 @@ export const crmProjectSyncDriver: ChannelDriver = {
             listOpenIds: async (afterId, pageLimit) => {
               if (!heads || headsKey !== key || !afterId) {
                 headsKey = key;
-                heads = await store.listProjects(projects.length > 0 ? null : limit, brands, projects);
+                heads = scope.projectIds.length === 0 && mode === "pick"
+                  ? []
+                  : await store.listProjects(scope.limit, brands, scope.projectIds);
               }
               return pageSelectedHeads(heads, afterId, pageLimit);
             },
@@ -247,20 +248,6 @@ export const crmProjectSyncDriver: ChannelDriver = {
           placeholder: "field.brands.placeholder",
         },
         {
-          key: "project_ids",
-          type: "string_array" as const,
-          widget: "multi_select" as const,
-          label: "field.projects",
-          description: "field.projects.description",
-          group: "group.scope",
-          required: false,
-          multiple: true,
-          dynamic_options: true,
-          options_depends_on: ["mongo_uri", "mongo_db", "brand_ids"],
-          option_labels_key: "project_names",
-          placeholder: "field.projects.placeholder",
-        },
-        {
           key: "selection",
           type: "string" as const,
           widget: "select" as const,
@@ -270,9 +257,25 @@ export const crmProjectSyncDriver: ChannelDriver = {
           required: true,
           default: "recent",
           options: [
+            { value: "pick", label: "option.selection.pick" },
             { value: "recent", label: "option.selection.recent" },
             { value: "all", label: "option.selection.all" },
           ],
+        },
+        {
+          key: "project_ids",
+          type: "string_array" as const,
+          widget: "multi_select" as const,
+          label: "field.projects",
+          description: "field.projects.description",
+          group: "group.scope",
+          required: true,
+          multiple: true,
+          dynamic_options: true,
+          options_depends_on: ["mongo_uri", "mongo_db", "brand_ids"],
+          option_labels_key: "project_names",
+          placeholder: "field.projects.placeholder",
+          visible_when: { field: "selection", value: "pick" },
         },
         {
           key: "recent_limit",
@@ -363,8 +366,11 @@ export function projectInstallConfig(config: Record<string, unknown>): Record<st
   const selection = projectSelectionOf(config);
   const brandIds = brandIdsOf(config);
   const brandNames = stringList(config.brand_names);
-  const projectIds = projectIdsOf(config);
+  const projectIds = selection === "pick" ? projectIdsOf(config) : [];
   const projectNames = stringList(config.project_names);
+  if (selection === "pick" && projectIds.length === 0) {
+    throw new ChannelDriverError("invalid_config", "自己勾选时至少选一个项目");
+  }
   return {
     ...(uri ? { mongo_uri: uri } : {}),
     ...(db ? { mongo_db: db } : {}),
@@ -373,7 +379,7 @@ export function projectInstallConfig(config: Record<string, unknown>): Record<st
     brand_ids: brandIds,
     project_ids: projectIds,
     ...(brandNames.length > 0 && brandNames.length === brandIds.length ? { brand_names: brandNames } : {}),
-    ...(projectNames.length > 0 && projectNames.length === projectIds.length ? { project_names: projectNames } : {}),
+    ...(selection === "pick" && projectNames.length === projectIds.length ? { project_names: projectNames } : {}),
     ...(selection === "recent" ? { recent_limit: projectRecentOf(config) } : {}),
   };
 }
@@ -385,8 +391,24 @@ function stringList(value: unknown): string[] {
   return typeof value === "string" ? value.split(",").map((item) => item.trim()).filter((item) => item.length > 0) : [];
 }
 
-export function projectSelectionOf(config: Record<string, unknown>): "all" | "recent" {
-  return stringOf(config.selection) === "all" ? "all" : "recent";
+export function projectSelectionOf(config: Record<string, unknown>): "all" | "recent" | "pick" {
+  const selection = stringOf(config.selection);
+  if (selection === "all" || selection === "pick") {
+    return selection;
+  }
+  return "recent";
+}
+
+/** 三种范围只生效一种。自己勾选才带项目编号；最新和全部不带，避免和勾选叠在一起。 */
+function projectListArgs(config: Record<string, unknown>): { limit: number | null; projectIds: string[] } {
+  const mode = projectSelectionOf(config);
+  if (mode === "pick") {
+    return { limit: null, projectIds: projectIdsOf(config) };
+  }
+  return {
+    limit: mode === "recent" ? projectRecentOf(config) : null,
+    projectIds: [],
+  };
 }
 
 function projectRecentOf(config: Record<string, unknown>): number {
@@ -419,11 +441,13 @@ function projectPushInput(
       if (brands.length === 0) {
         return [];
       }
-      const projects = projectIdsOf(installation.config);
-      const store = await open();
       const mode = projectSelectionOf(installation.config);
-      const limit = mode === "recent" ? projectRecentOf(installation.config) : null;
-      return store.listProjects(projects.length > 0 ? null : limit, brands, projects);
+      const scope = projectListArgs(installation.config);
+      if (mode === "pick" && scope.projectIds.length === 0) {
+        return [];
+      }
+      const store = await open();
+      return store.listProjects(scope.limit, brands, scope.projectIds);
     },
     readProject: async (projectId: string) => {
       const store = await open();
