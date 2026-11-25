@@ -35,8 +35,8 @@ import {
   subjectCatalog as deliverySubjectCatalog,
   threadId,
 } from "./locators";
-import { brandIdsOf, pageChoices, uniqueStrings } from "./brands";
-import { listBrandChoices, listBrandChoicesByIds, listChooserHeads, listOrderHeadsByIds, mongoStore } from "./mongo-store";
+import { brandIdsOf, pageChoices, projectIdsOf, uniqueStrings } from "./brands";
+import { listBrandChoices, listBrandChoicesByIds, listChooserHeads, listOrderHeadsByIds, listProjectChoices, listProjectChoicesByIds, mongoStore } from "./mongo-store";
 import { bindPushWebhook, clearPushArmed, forgetPushHost, kickPush, markPushArmed, pushArmed, readPushProgress, rememberPushHost, startDeliveryPush, stopPush } from "./push";
 import type { DeliveryStore, OpenOrderHead } from "./model";
 import { advanceDelivery, parseOrderCursor } from "./sync";
@@ -115,7 +115,8 @@ export const crmDeliverySyncDriver: ChannelDriver = {
           const store = await openStore(installation, host);
           const mode = selectionOf(installation.config);
           const brands = brandIdsOf(installation.config);
-          const key = `${mode}:${brands.join(",")}:${mode === "pick"
+          const projects = projectIdsOf(installation.config);
+          const key = `${mode}:${brands.join(",")}:${projects.join(",")}:${mode === "pick"
             ? orderIdsOf(installation.config).join(",")
             : mode === "recent"
               ? String(recentOf(installation.config))
@@ -131,13 +132,14 @@ export const crmDeliverySyncDriver: ChannelDriver = {
                   limit,
                   brands,
                   mode === "after_external" ? "after_external" : "delivery",
+                  projects,
                 );
               }
               if (!selected || selectedKey !== key || !afterId) {
                 selectedKey = key;
                 selected = mode === "pick"
-                  ? await store.listHeadsByIds(orderIdsOf(installation.config), brands)
-                  : await store.listRecentHeads(recentOf(installation.config), brands);
+                  ? await store.listHeadsByIds(orderIdsOf(installation.config), brands, projects)
+                  : await store.listRecentHeads(recentOf(installation.config), brands, projects);
               }
               return pageSelectedHeads(selected, afterId, limit);
             },
@@ -250,6 +252,20 @@ export const crmDeliverySyncDriver: ChannelDriver = {
           placeholder: "field.brands.placeholder",
         },
         {
+          key: "project_ids",
+          type: "string_array" as const,
+          widget: "multi_select" as const,
+          label: "field.projects",
+          description: "field.projects.description",
+          group: "group.scope",
+          required: false,
+          multiple: true,
+          dynamic_options: true,
+          options_depends_on: ["mongo_uri", "mongo_db", "brand_ids"],
+          option_labels_key: "project_names",
+          placeholder: "field.projects.placeholder",
+        },
+        {
           key: "selection",
           type: "string" as const,
           widget: "select" as const,
@@ -275,7 +291,7 @@ export const crmDeliverySyncDriver: ChannelDriver = {
           required: true,
           multiple: true,
           dynamic_options: true,
-          options_depends_on: ["mongo_uri", "mongo_db", "brand_ids"],
+          options_depends_on: ["mongo_uri", "mongo_db", "brand_ids", "project_ids"],
           placeholder: "field.orderIds.placeholder",
           option_labels_key: "order_names",
           visible_when: { field: "selection", value: "pick" },
@@ -346,10 +362,20 @@ export const crmDeliverySyncDriver: ChannelDriver = {
           query, cursor, limit, selected,
         );
       }
+      if (field === "project_ids") {
+        const brands = brandIdsOf({ brand_ids: values?.brand_ids });
+        const selected = await savedChoiceIds(env, values, "project_ids", CONNECTOR_TYPE);
+        const listed = await cachedProjectOptions(saved, brands);
+        return pageChoices(
+          await withMissingProjects(saved, listed, selected),
+          query, cursor, limit, selected,
+        );
+      }
       if (field === "order_ids") {
         const brands = brandIdsOf({ brand_ids: values?.brand_ids });
+        const projects = projectIdsOf({ project_ids: values?.project_ids });
         const selected = await savedChoiceIds(env, values, "order_ids", CONNECTOR_TYPE);
-        const listed = await cachedOrderOptions(saved, brands);
+        const listed = await cachedOrderOptions(saved, brands, projects);
         return pageChoices(
           await withMissingOrders(saved, listed, selected),
           query, cursor, limit, selected,
@@ -391,6 +417,7 @@ export function installConfig(config: Record<string, unknown>): Record<string, J
   const db = stringOf(config.mongo_db) || (uri ? databaseFromUri(uri) : "");
   const selection = selectionOf(config);
   const brandIds = brandIdsOf(config);
+  const projectIds = projectIdsOf(config);
   const stored: Record<string, JsonValue> = {
     ...(uri ? { mongo_uri: uri } : {}),
     ...(db ? { mongo_db: db } : {}),
@@ -398,10 +425,15 @@ export function installConfig(config: Record<string, unknown>): Record<string, J
     sync_concurrency: boundedInt(config.sync_concurrency, DEFAULT_CONCURRENCY, 1, MAX_CONCURRENCY),
     selection,
     brand_ids: brandIds,
+    project_ids: projectIds,
   };
   const brandNames = csvList(config.brand_names);
   if (brandNames.length > 0 && brandNames.length === brandIds.length) {
     stored.brand_names = brandNames;
+  }
+  const projectNames = csvList(config.project_names);
+  if (projectNames.length > 0 && projectNames.length === projectIds.length) {
+    stored.project_names = projectNames;
   }
   if (selection === "recent") {
     stored.recent_limit = recentOf(config);
@@ -428,18 +460,19 @@ async function listScopedOrderHeads(
   if (brands.length === 0) {
     return [];
   }
+  const projects = projectIdsOf(config);
   const mode = selectionOf(config);
   if (mode === "pick") {
-    return store.listHeadsByIds(orderIdsOf(config), brands);
+    return store.listHeadsByIds(orderIdsOf(config), brands, projects);
   }
   if (mode === "recent") {
-    return store.listRecentHeads(recentOf(config), brands);
+    return store.listRecentHeads(recentOf(config), brands, projects);
   }
   const scope = mode === "after_external" ? "after_external" : "delivery";
   const all: OpenOrderHead[] = [];
   let after: string | null = null;
   for (;;) {
-    const page = await store.listOpenIds(after, 500, brands, scope);
+    const page = await store.listOpenIds(after, 500, brands, scope, projects);
     all.push(...page);
     if (page.length < 500) {
       return all;
@@ -643,6 +676,11 @@ let brandOptionCache: {
   at: number;
   options: Array<{ value: string; label: { literal: string }; title?: string }>;
 } | undefined;
+let projectOptionCache: {
+  key: string;
+  at: number;
+  options: Array<{ value: string; label: { literal: string }; title?: string }>;
+} | undefined;
 let orderOptionCache: {
   key: string;
   at: number;
@@ -703,17 +741,39 @@ async function cachedBrandOptions(saved: { uri: string; db: string }): Promise<A
   return options;
 }
 
-async function cachedOrderOptions(saved: { uri: string; db: string }, brandIds: string[]): Promise<Array<{
+async function cachedProjectOptions(
+  saved: { uri: string; db: string },
+  brandIds: string[],
+): Promise<Array<{ value: string; label: { literal: string }; title?: string }>> {
+  const key = createHash("sha256").update(`project\u0000${saved.db}\u0000${saved.uri}\u0000${brandIds.join(",")}`).digest("hex");
+  const now = Date.now();
+  if (projectOptionCache && projectOptionCache.key === key && now - projectOptionCache.at < ORDER_OPTION_CACHE_MS) {
+    return projectOptionCache.options;
+  }
+  const options = brandIds.length === 0 ? [] : await listProjectChoices(saved.uri, saved.db, brandIds);
+  projectOptionCache = { key, at: now, options };
+  return options;
+}
+
+async function cachedOrderOptions(
+  saved: { uri: string; db: string },
+  brandIds: string[],
+  projectIds: string[],
+): Promise<Array<{
   value: string;
   label: { literal: string };
   title: string;
 }>> {
-  const key = createHash("sha256").update(`${saved.db}\u0000${saved.uri}\u0000${brandIds.join(",")}`).digest("hex");
+  const key = createHash("sha256")
+    .update(`${saved.db}\u0000${saved.uri}\u0000${brandIds.join(",")}\u0000${projectIds.join(",")}`)
+    .digest("hex");
   const now = Date.now();
   if (orderOptionCache && orderOptionCache.key === key && now - orderOptionCache.at < ORDER_OPTION_CACHE_MS) {
     return orderOptionCache.options;
   }
-  const heads = brandIds.length === 0 ? [] : await listChooserHeads(mongoStore(saved.uri, saved.db), brandIds);
+  const heads = brandIds.length === 0
+    ? []
+    : await listChooserHeads(mongoStore(saved.uri, saved.db), brandIds, projectIds);
   const options = heads.map((row) => ({
     value: row.id,
     label: { literal: chooserLabel(row) },
@@ -758,6 +818,20 @@ export async function savedChoiceIds(
   }
   await refreshInstallationsFromKernel(env);
   return uniqueStrings(rememberedInstallation(connectorType)?.config[key]).slice(0, 200);
+}
+
+export async function withMissingProjects<T extends { value: string }>(
+  saved: { uri: string; db: string },
+  listed: T[],
+  selected: readonly string[],
+): Promise<T[]> {
+  const have = new Set(listed.map((option) => option.value));
+  const missing = selected.filter((id) => !have.has(id));
+  if (missing.length === 0) {
+    return listed;
+  }
+  const extras = await listProjectChoicesByIds(saved.uri, saved.db, missing);
+  return [...extras, ...listed] as T[];
 }
 
 export async function withMissingBrands<T extends { value: string }>(

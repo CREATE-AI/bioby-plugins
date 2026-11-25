@@ -188,15 +188,19 @@ export interface PageQuery {
 }
 
 export interface DeliveryStore {
-  /** brandIds 不传表示不按品牌收。传入（含空数组）就只收这些品牌下的订单。 */
+  /**
+   * brandIds 不传表示不按品牌收。传入（含空数组）就只收这些品牌下的订单。
+   * projectIds 不传或空数组表示品牌下的项目都收。传入就只收这些项目的订单。
+   */
   listOpenIds(
     afterId: string | null,
     limit: number,
     brandIds?: string[],
     scope?: OrderListScope,
+    projectIds?: string[],
   ): Promise<OpenOrderHead[]>;
-  listRecentHeads(limit: number, brandIds?: string[]): Promise<OpenOrderHead[]>;
-  listHeadsByIds(ids: string[], brandIds?: string[]): Promise<OpenOrderHead[]>;
+  listRecentHeads(limit: number, brandIds?: string[], projectIds?: string[]): Promise<OpenOrderHead[]>;
+  listHeadsByIds(ids: string[], brandIds?: string[], projectIds?: string[]): Promise<OpenOrderHead[]>;
   readOrder(id: string): Promise<OrderDoc | null>;
   readProject(id: string): Promise<ProjectDoc | null>;
   listMails(order: OrderDoc, query: PageQuery, limit: number): Promise<IdPage<MailDoc>>;

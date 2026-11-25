@@ -33,7 +33,8 @@ const { influencerMailScope, pinDatabaseUri } = require("../dist/mongo-store");
 const { decodeDocument, decodeStoredText } = require("../dist/stored-text");
 const { compactTime } = require("../dist/time");
 const { SOURCE } = require("../dist/locators");
-const { brandIdsOf, pageChoices } = require("../dist/brands");
+const { brandIdsOf, narrowProjectIds, pageChoices, projectIdsOf } = require("../dist/brands");
+const { orderScopeClause } = require("../dist/mongo-store");
 const { clearPushArmed, forgetPushHost, isPushRunning, markPushArmed, pushArmed, pushBatchAdvances, pushRequestAccepted, pushToken, readPushProgress, rememberPushHost, rememberPushedIds, resetPushState, runPushQueues, setPushStateDir, splitPushLanes, startDeliveryPush, stopPush, submitPushBatch } = require("../dist/push");
 const { rememberInstallation } = require("../dist/installation-snapshot");
 const { resumeArmedPush } = require("../dist/push-resume");
@@ -405,6 +406,32 @@ test("install rejects a bad Mongo URI and keeps the secret field for the host to
   });
   assert.deepEqual(branded.brand_ids, ["b1", "b2"]);
   assert.deepEqual(branded.brand_names, ["甲", "乙"]);
+  assert.deepEqual(branded.project_ids, []);
+  const scoped = installConfig({
+    mongo_uri: "mongodb://localhost:27017/crm",
+    brand_ids: ["b1"],
+    project_ids: ["p1", "p1", " p2 "],
+    project_names: "春季,夏季",
+  });
+  assert.deepEqual(scoped.project_ids, ["p1", "p2"]);
+  assert.deepEqual(scoped.project_names, ["春季", "夏季"]);
+  assert.deepEqual(projectIdsOf({ project_ids: "p1, p1, p2" }), ["p1", "p2"]);
+  assert.deepEqual(narrowProjectIds(["p1", "p2", "p3"], undefined), {
+    restricted: false,
+    ids: ["p1", "p2", "p3"],
+  });
+  assert.deepEqual(narrowProjectIds(["p1", "p2"], ["p2", "other"]), {
+    restricted: true,
+    ids: ["p2"],
+  });
+  assert.deepEqual(narrowProjectIds(["p1"], ["other"]), { restricted: true, ids: [] });
+  assert.deepEqual(orderScopeClause(["b1"], ["p1", "p2"], []), {
+    $or: [{ brandId: { $in: ["b1"] } }, { projectId: { $in: ["p1", "p2"] } }],
+  });
+  assert.deepEqual(orderScopeClause(["b1"], ["p1", "p2"], ["p2", "other"]), {
+    projectId: { $in: ["p2"] },
+  });
+  assert.deepEqual(orderScopeClause(["b1"], ["p1"], ["other"]), { _id: { $in: [] } });
   assert.throws(() => installConfig({
     mongo_uri: "mongodb://localhost:27017/crm",
     selection: "pick",
@@ -435,9 +462,16 @@ test("install rejects a bad Mongo URI and keeps the secret field for the host to
     "group.scope",
     "group.scope",
     "group.scope",
+    "group.scope",
     "group.advanced",
     "group.advanced",
   ]);
+  const projects = catalog.fields.find((field) => field.key === "project_ids");
+  assert.equal(projects.widget, "multi_select");
+  assert.deepEqual(projects.options_depends_on, ["mongo_uri", "mongo_db", "brand_ids"]);
+  assert.equal(projects.required, false);
+  const orders = catalog.fields.find((field) => field.key === "order_ids");
+  assert.deepEqual(orders.options_depends_on, ["mongo_uri", "mongo_db", "brand_ids", "project_ids"]);
   assert.equal(catalog.fields.find((field) => field.key === "mongo_uri").widget, "text");
   assert.equal(catalog.fields.find((field) => field.key === "mongo_uri").secret, undefined);
   assert.equal(catalog.fields.every((field) => field.type), true);

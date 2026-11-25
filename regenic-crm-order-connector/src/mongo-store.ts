@@ -8,6 +8,7 @@ import {
   type FindCursor,
   type FindOptions,
 } from "mongodb";
+import { narrowProjectIds } from "./brands";
 import { decodeDocument } from "./stored-text";
 import { bareMessageId } from "./model";
 import type {
@@ -45,12 +46,12 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
     return { brandIds, projectIds: brandProjectIds };
   }
   return {
-    async listOpenIds(afterId, limit, brandIds, scope) {
+    async listOpenIds(afterId, limit, brandIds, scope, projectIds) {
       const database = await db();
       const brand = await scopeFor(database, brandIds);
       const rows = await database
         .collection("project_fields")
-        .find(openFilter(afterId ? { _id: { $gt: asId(afterId) } } : {}, brand, scope))
+        .find(openFilter(afterId ? { _id: { $gt: asId(afterId) } } : {}, brand, scope, projectIds))
         .sort({ _id: 1 })
         .limit(limit)
         .project(ORDER_HEAD_FIELDS)
@@ -58,12 +59,12 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
       return withProjects(database, rows);
     },
 
-    async listRecentHeads(limit, brandIds) {
+    async listRecentHeads(limit, brandIds, projectIds) {
       const database = await db();
       const brand = await scopeFor(database, brandIds);
       const rows = await database
         .collection("project_fields")
-        .find(openFilter({}, brand))
+        .find(openFilter({}, brand, undefined, projectIds))
         .sort({ "submitWorkflow.submitTime": -1, createdTime: -1, _id: -1 })
         .limit(limit)
         .project(ORDER_HEAD_FIELDS)
@@ -71,7 +72,7 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
       return withProjects(database, rows);
     },
 
-    async listHeadsByIds(ids, brandIds) {
+    async listHeadsByIds(ids, brandIds, projectIds) {
       const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
       if (unique.length === 0) {
         return [];
@@ -80,7 +81,7 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
       const brand = await scopeFor(database, brandIds);
       const rows = await database
         .collection("project_fields")
-        .find(openFilter({ _id: { $in: unique.map(asId) } }, brand))
+        .find(openFilter({ _id: { $in: unique.map(asId) } }, brand, undefined, projectIds))
         .project(ORDER_HEAD_FIELDS)
         .toArray();
       const heads = await withProjects(database, rows);
@@ -481,8 +482,12 @@ function decoded(value: unknown): unknown {
 
 const CHOOSER_LIMIT = 5000;
 
-export async function listChooserHeads(store: DeliveryStore, brandIds?: string[]): Promise<OpenOrderHead[]> {
-  return store.listRecentHeads(CHOOSER_LIMIT, brandIds);
+export async function listChooserHeads(
+  store: DeliveryStore,
+  brandIds?: string[],
+  projectIds?: string[],
+): Promise<OpenOrderHead[]> {
+  return store.listRecentHeads(CHOOSER_LIMIT, brandIds, projectIds);
 }
 
 async function withProjects(database: Db, rows: Document[]): Promise<OpenOrderHead[]> {
@@ -520,6 +525,7 @@ function openFilter(
   extra: Record<string, unknown> = {},
   brand?: { brandIds: string[]; projectIds: string[] },
   scope?: OrderListScope,
+  selectedProjectIds?: string[],
 ): Filter<Document> {
   const view = scope === "after_external"
     ? {
@@ -538,7 +544,23 @@ function openFilter(
   if (!brand) {
     return loose(base);
   }
-  return { $and: [loose(base), loose(orderBrandClause(brand.brandIds, brand.projectIds))] };
+  return { $and: [loose(base), loose(orderScopeClause(brand.brandIds, brand.projectIds, selectedProjectIds))] };
+}
+
+/** 没选项目时按品牌收。选了项目就只按这些项目的编号收，不再把品牌下其他项目并进来。 */
+export function orderScopeClause(
+  brandIds: string[],
+  brandProjectIds: string[],
+  selectedProjectIds?: string[],
+): Record<string, unknown> {
+  const narrowed = narrowProjectIds(brandProjectIds, selectedProjectIds);
+  if (narrowed.restricted) {
+    if (narrowed.ids.length === 0) {
+      return { _id: { $in: [] } };
+    }
+    return { projectId: { $in: narrowed.ids } };
+  }
+  return orderBrandClause(brandIds, brandProjectIds);
 }
 
 function orderBrandClause(brandIds: string[], projectIds: string[]): Record<string, unknown> {
@@ -580,6 +602,46 @@ export async function listBrandChoices(
     .limit(2_000)
     .toArray();
   return rows.map(brandChoice);
+}
+
+/** 没删除的项目，只含这些品牌。名称从 a 到 z，同名再按编号。 */
+export async function listProjectChoices(
+  uri: string,
+  dbName: string,
+  brandIds: readonly string[],
+): Promise<Array<{ value: string; label: { literal: string }; title?: string }>> {
+  const unique = [...new Set(brandIds.map((id) => id.trim()).filter(Boolean))];
+  if (unique.length === 0) {
+    return [];
+  }
+  const database = await openConfiguredDb(uri, dbName);
+  const rows = await database
+    .collection("projects")
+    .find(loose({ isDeleted: false, brandId: { $in: unique } }))
+    .project({ name: 1 })
+    .sort({ name: 1, _id: 1 })
+    .limit(2_000)
+    .toArray();
+  return rows.map(projectChoice);
+}
+
+/** 按已保存的项目编号去库里对名称，不依赖它是不是还在当前品牌这一页里。 */
+export async function listProjectChoicesByIds(
+  uri: string,
+  dbName: string,
+  ids: readonly string[],
+): Promise<Array<{ value: string; label: { literal: string }; title?: string }>> {
+  const unique = uniqueIds(ids);
+  if (unique.length === 0) {
+    return [];
+  }
+  const database = await openConfiguredDb(uri, dbName);
+  const rows = await database
+    .collection("projects")
+    .find(loose({ _id: { $in: unique.map(asId) }, isDeleted: { $ne: true } }))
+    .project({ name: 1 })
+    .toArray();
+  return rows.map(projectChoice);
 }
 
 /** 按已保存的品牌编号去库里对名称，不依赖当前这一页有没有把它列出来。 */
@@ -630,6 +692,16 @@ function brandChoice(row: Document): { value: string; label: { literal: string }
     value: id,
     label: { literal: name },
     ...(name !== id ? { title: name } : {}),
+  };
+}
+
+function projectChoice(row: Document): { value: string; label: { literal: string }; title?: string } {
+  const id = idOf(row._id);
+  const name = stringOf(row.name) || id;
+  return {
+    value: id,
+    label: { literal: name },
+    ...(name !== id ? { title: id } : {}),
   };
 }
 
