@@ -151,17 +151,21 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
 export function projectStore(uri: string, dbName: string): ProjectStore {
   const db = () => openConfiguredDb(uri, dbName);
   return {
-    async listProjects(limit, brandIds) {
+    async listProjects(limit, brandIds, projectIds) {
       const filter: Record<string, unknown> = { isDeleted: false };
       if (brandIds) {
         filter.brandId = { $in: brandIds };
+      }
+      const picked = [...new Set((projectIds ?? []).map((id) => id.trim()).filter(Boolean))];
+      if (picked.length > 0) {
+        filter._id = { $in: picked.map(asId) };
       }
       let query = (await db())
         .collection("projects")
         .find(loose(filter))
         .sort({ createdTime: -1, _id: -1 })
         .project({ name: 1 });
-      if (limit != null) {
+      if (picked.length === 0 && limit != null) {
         query = query.limit(limit);
       }
       const rows = await query.toArray();
