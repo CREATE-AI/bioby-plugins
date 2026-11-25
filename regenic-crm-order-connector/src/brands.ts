@@ -3,6 +3,27 @@ export function brandIdsOf(config: Record<string, unknown>): string[] {
   return uniqueStrings(config.brand_ids);
 }
 
+/** 安装表单里选中的项目 id。空着表示不按项目收，品牌下的项目都要。 */
+export function projectIdsOf(config: Record<string, unknown>): string[] {
+  return uniqueStrings(config.project_ids);
+}
+
+/**
+ * 没选项目时 restricted 为 false，订单仍按整个品牌收。
+ * 选了项目就只留这些品牌下的项目；不在品牌里的编号丢掉，避免换品牌后把别的项目带进来。
+ */
+export function narrowProjectIds(
+  brandProjectIds: readonly string[],
+  selected: readonly string[] | undefined,
+): { restricted: boolean; ids: string[] } {
+  const picked = uniqueStrings(selected);
+  if (picked.length === 0) {
+    return { restricted: false, ids: [...brandProjectIds] };
+  }
+  const allowed = new Set(brandProjectIds);
+  return { restricted: true, ids: picked.filter((id) => allowed.has(id)) };
+}
+
 export function uniqueStrings(value: unknown): string[] {
   const list = Array.isArray(value)
     ? value

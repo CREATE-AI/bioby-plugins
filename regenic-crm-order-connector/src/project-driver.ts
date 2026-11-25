@@ -6,7 +6,7 @@ import {
   type JsonValue,
   type SyncSource,
 } from "@regenic/domain";
-import { brandIdsOf, pageChoices } from "./brands";
+import { brandIdsOf, pageChoices, projectIdsOf } from "./brands";
 import { freshDirectoryMemory, listDirectoryPage, pageSelectedHeads } from "./directory";
 import {
   asSyncError,
@@ -19,6 +19,7 @@ import {
   readSavedMongo,
   savedChoiceIds,
   withMissingBrands,
+  withMissingProjects,
   rememberDeliveryCursor,
   selectStoredCursor,
 } from "./driver";
@@ -37,7 +38,7 @@ import {
   projectThreadId,
 } from "./locators";
 import type { ProjectHead, ProjectStore } from "./model";
-import { listBrandChoices, projectStore } from "./mongo-store";
+import { listBrandChoices, listProjectChoices, projectStore } from "./mongo-store";
 import { projectLocaleTables } from "./project-locales";
 import { advanceProject, parseProjectCursor, projectLabel } from "./project-sync";
 
@@ -122,8 +123,9 @@ export const crmProjectSyncDriver: ChannelDriver = {
           const store = await openProjectStore(installation, host);
           const mode = projectSelectionOf(installation.config);
           const brands = brandIdsOf(installation.config);
+          const projects = projectIdsOf(installation.config);
           const limit = mode === "recent" ? projectRecentOf(installation.config) : null;
-          const key = `${mode}:${limit ?? ""}:${brands.join(",")}`;
+          const key = `${mode}:${limit ?? ""}:${brands.join(",")}:${projects.join(",")}`;
           return await listDirectoryPage<ProjectHead>({
             cursor,
             concurrency: PROJECT_DIRECTORY_PAGE,
@@ -135,7 +137,7 @@ export const crmProjectSyncDriver: ChannelDriver = {
             listOpenIds: async (afterId, pageLimit) => {
               if (!heads || headsKey !== key || !afterId) {
                 headsKey = key;
-                heads = await store.listProjects(limit, brands);
+                heads = await store.listProjects(projects.length > 0 ? null : limit, brands, projects);
               }
               return pageSelectedHeads(heads, afterId, pageLimit);
             },
@@ -245,6 +247,20 @@ export const crmProjectSyncDriver: ChannelDriver = {
           placeholder: "field.brands.placeholder",
         },
         {
+          key: "project_ids",
+          type: "string_array" as const,
+          widget: "multi_select" as const,
+          label: "field.projects",
+          description: "field.projects.description",
+          group: "group.scope",
+          required: false,
+          multiple: true,
+          dynamic_options: true,
+          options_depends_on: ["mongo_uri", "mongo_db", "brand_ids"],
+          option_labels_key: "project_names",
+          placeholder: "field.projects.placeholder",
+        },
+        {
           key: "selection",
           type: "string" as const,
           widget: "select" as const,
@@ -302,7 +318,7 @@ export const crmProjectSyncDriver: ChannelDriver = {
   },
 
   async listCatalogFieldOptionsPage({ env, field, query, cursor, limit, values }) {
-    if (field !== "brand_ids") {
+    if (field !== "brand_ids" && field !== "project_ids") {
       return { options: [] };
     }
     const saved = connectionFromFormValues(values) ?? await readSavedMongo(env, [PROJECT_CONNECTOR_TYPE, "crm-delivery-sync"]);
@@ -310,11 +326,17 @@ export const crmProjectSyncDriver: ChannelDriver = {
       return { options: [] };
     }
     try {
-      const selected = await savedChoiceIds(env, values, "brand_ids", PROJECT_CONNECTOR_TYPE);
-      const listed = await listBrandChoices(saved.uri, saved.db);
-      return pageChoices(await withMissingBrands(saved, listed, selected), query, cursor, limit, selected);
+      if (field === "brand_ids") {
+        const selected = await savedChoiceIds(env, values, "brand_ids", PROJECT_CONNECTOR_TYPE);
+        const listed = await listBrandChoices(saved.uri, saved.db);
+        return pageChoices(await withMissingBrands(saved, listed, selected), query, cursor, limit, selected);
+      }
+      const brands = brandIdsOf({ brand_ids: values?.brand_ids });
+      const selected = await savedChoiceIds(env, values, "project_ids", PROJECT_CONNECTOR_TYPE);
+      const listed = brands.length === 0 ? [] : await listProjectChoices(saved.uri, saved.db, brands);
+      return pageChoices(await withMissingProjects(saved, listed, selected), query, cursor, limit, selected);
     } catch {
-      throw new ChannelDriverError("sync_failed", "读取品牌失败");
+      throw new ChannelDriverError("sync_failed", field === "brand_ids" ? "读取品牌失败" : "读取项目失败");
     }
   },
 
@@ -341,13 +363,17 @@ export function projectInstallConfig(config: Record<string, unknown>): Record<st
   const selection = projectSelectionOf(config);
   const brandIds = brandIdsOf(config);
   const brandNames = stringList(config.brand_names);
+  const projectIds = projectIdsOf(config);
+  const projectNames = stringList(config.project_names);
   return {
     ...(uri ? { mongo_uri: uri } : {}),
     ...(db ? { mongo_db: db } : {}),
     refresh_interval_ms: boundedInt(config.refresh_interval_ms, DEFAULT_PROJECT_REFRESH_MS, 5_000, 3_600_000),
     selection,
     brand_ids: brandIds,
+    project_ids: projectIds,
     ...(brandNames.length > 0 && brandNames.length === brandIds.length ? { brand_names: brandNames } : {}),
+    ...(projectNames.length > 0 && projectNames.length === projectIds.length ? { project_names: projectNames } : {}),
     ...(selection === "recent" ? { recent_limit: projectRecentOf(config) } : {}),
   };
 }
@@ -393,10 +419,11 @@ function projectPushInput(
       if (brands.length === 0) {
         return [];
       }
+      const projects = projectIdsOf(installation.config);
       const store = await open();
       const mode = projectSelectionOf(installation.config);
       const limit = mode === "recent" ? projectRecentOf(installation.config) : null;
-      return store.listProjects(limit, brands);
+      return store.listProjects(projects.length > 0 ? null : limit, brands, projects);
     },
     readProject: async (projectId: string) => {
       const store = await open();

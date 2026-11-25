@@ -188,15 +188,19 @@ export interface PageQuery {
 }
 
 export interface DeliveryStore {
-  /** brandIds 不传表示不按品牌收。传入（含空数组）就只收这些品牌下的订单。 */
+  /**
+   * brandIds 不传表示不按品牌收。传入（含空数组）就只收这些品牌下的订单。
+   * projectIds 不传或空数组表示品牌下的项目都收。传入就只收这些项目的订单。
+   */
   listOpenIds(
     afterId: string | null,
     limit: number,
     brandIds?: string[],
     scope?: OrderListScope,
+    projectIds?: string[],
   ): Promise<OpenOrderHead[]>;
-  listRecentHeads(limit: number, brandIds?: string[]): Promise<OpenOrderHead[]>;
-  listHeadsByIds(ids: string[], brandIds?: string[]): Promise<OpenOrderHead[]>;
+  listRecentHeads(limit: number, brandIds?: string[], projectIds?: string[]): Promise<OpenOrderHead[]>;
+  listHeadsByIds(ids: string[], brandIds?: string[], projectIds?: string[]): Promise<OpenOrderHead[]>;
   readOrder(id: string): Promise<OrderDoc | null>;
   readProject(id: string): Promise<ProjectDoc | null>;
   listMails(order: OrderDoc, query: PageQuery, limit: number): Promise<IdPage<MailDoc>>;
@@ -248,8 +252,11 @@ export interface ProjectOrderRow {
 }
 
 export interface ProjectStore {
-  /** 没删除的项目，创建时间从新到旧。limit 为 null 时取全部。brandIds 不传表示不按品牌收。 */
-  listProjects(limit: number | null, brandIds?: string[]): Promise<ProjectHead[]>;
+  /**
+   * 没删除的项目，创建时间从新到旧。limit 为 null 时取全部。brandIds 不传表示不按品牌收。
+   * projectIds 不传或空数组表示品牌下的项目都按 limit 收。传入就只收这些项目，不再截成最新的若干个。
+   */
+  listProjects(limit: number | null, brandIds?: string[], projectIds?: string[]): Promise<ProjectHead[]>;
   /** 给出的项目里，已经删除或者库里没有了的那些。 */
   listGoneProjects(ids: string[]): Promise<string[]>;
   readProjectInfo(id: string): Promise<ProjectInfoDoc | null>;

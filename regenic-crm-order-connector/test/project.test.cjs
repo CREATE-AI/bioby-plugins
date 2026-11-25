@@ -16,6 +16,7 @@ test("project install keeps newest by default and only offers newest or all", ()
   const config = projectInstallConfig({ mongo_uri: "mongodb://localhost:27017/crm" });
   assert.equal(config.selection, "recent");
   assert.deepEqual(config.brand_ids, []);
+  assert.deepEqual(config.project_ids, []);
   assert.equal(config.recent_limit, 30);
   assert.equal(config.mongo_db, "crm");
   const all = projectInstallConfig({ mongo_db: "crm", selection: "all" });
@@ -33,6 +34,18 @@ test("project install keeps newest by default and only offers newest or all", ()
   const brands = catalog.fields.find((field) => field.key === "brand_ids");
   assert.equal(brands.multiple, true);
   assert.equal(brands.widget, "multi_select");
+  const projects = catalog.fields.find((field) => field.key === "project_ids");
+  assert.equal(projects.widget, "multi_select");
+  assert.equal(projects.required, false);
+  assert.deepEqual(projects.options_depends_on, ["mongo_uri", "mongo_db", "brand_ids"]);
+  const scoped = projectInstallConfig({
+    mongo_uri: "mongodb://localhost:27017/crm",
+    brand_ids: ["b1"],
+    project_ids: ["p1", "p1", " p2 "],
+    project_names: "春季,夏季",
+  });
+  assert.deepEqual(scoped.project_ids, ["p1", "p2"]);
+  assert.deepEqual(scoped.project_names, ["春季", "夏季"]);
   assert.equal(catalog.install_confirm.when.value, "all");
 });
 
