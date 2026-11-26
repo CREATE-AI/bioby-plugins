@@ -140,7 +140,7 @@ test("the order chooser shows the delivery owner and can search by that name", (
   });
   assert.equal(crowded.includes("视频草稿修改中"), true);
   assert.equal(crowded.includes("选中：2026-11-03 10:00"), true);
-  assert.equal(crowded.includes("instagram.com"), false);
+  assert.equal(crowded.includes("instagram.com/npmisans/very/long/profile/path"), true);
 });
 
 test("push progress counts orders that already have a conversation", () => {

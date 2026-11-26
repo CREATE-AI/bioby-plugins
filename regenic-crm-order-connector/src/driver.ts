@@ -784,9 +784,6 @@ async function cachedOrderOptions(
   return options;
 }
 
-/** 选项大约两行。状态和选中时间优先留下，超了才去掉达人链接。 */
-const CHOOSER_LABEL_COLUMNS = 124;
-
 export function chooserLabel(row: OpenOrderHead): string {
   const nick = row.nickname?.trim();
   const project = row.projectName?.trim();
@@ -803,13 +800,11 @@ export function chooserLabel(row: OpenOrderHead): string {
   if (selected) {
     parts.push(`选中：${selected}`);
   }
-  const base = parts.join(" · ");
   const link = bloggerLinkLabel(row.bloggerLink);
-  if (!link) {
-    return base;
+  if (link) {
+    parts.push(link);
   }
-  const withLink = `${base} · ${link}`;
-  return displayColumns(withLink) <= CHOOSER_LABEL_COLUMNS ? withLink : base;
+  return parts.join(" · ");
 }
 
 function chooserTitle(row: OpenOrderHead): string {
@@ -846,14 +841,6 @@ function selectedClock(value: string | undefined): string {
   }
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${parsed.getUTCFullYear()}-${pad(parsed.getUTCMonth() + 1)}-${pad(parsed.getUTCDate())} ${pad(parsed.getUTCHours())}:${pad(parsed.getUTCMinutes())}`;
-}
-
-function displayColumns(value: string): number {
-  let width = 0;
-  for (const char of value) {
-    width += (char.codePointAt(0) ?? 0) > 0xff ? 2 : 1;
-  }
-  return width;
 }
 
 /** 表单里已经记住的编号。这一页没带时，再用上次保存的安装配置。 */
