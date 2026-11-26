@@ -39,6 +39,7 @@ import { brandIdsOf, pageChoices, projectIdsOf, uniqueStrings } from "./brands";
 import { listBrandChoices, listBrandChoicesByIds, listChooserHeads, listOrderHeadsByIds, listProjectChoices, listProjectChoicesByIds, mongoStore } from "./mongo-store";
 import { bindPushWebhook, clearPushArmed, forgetPushHost, kickPush, markPushArmed, pushArmed, readPushProgress, rememberPushHost, startDeliveryPush, stopPush } from "./push";
 import type { DeliveryStore, OpenOrderHead } from "./model";
+import { statusLabel } from "./status";
 import { advanceDelivery, parseOrderCursor } from "./sync";
 
 export const crmDeliverySyncDriver: ChannelDriver = {
@@ -783,6 +784,9 @@ async function cachedOrderOptions(
   return options;
 }
 
+/** 选项大约两行。状态和选中时间优先留下，超了才去掉达人链接。 */
+const CHOOSER_LABEL_COLUMNS = 124;
+
 export function chooserLabel(row: OpenOrderHead): string {
   const nick = row.nickname?.trim();
   const project = row.projectName?.trim();
@@ -792,18 +796,64 @@ export function chooserLabel(row: OpenOrderHead): string {
   if (owner) {
     parts.push(`交付：${owner}`);
   }
-  const link = row.bloggerLink?.trim().replace(/^https?:\/\//, "");
-  if (link) {
-    parts.push(link.length > 48 ? `${link.slice(0, 45)}…` : link);
+  if (row.status?.trim()) {
+    parts.push(statusLabel(row.status));
   }
-  return parts.join(" · ");
+  const selected = selectedClock(row.selectedTime);
+  if (selected) {
+    parts.push(`选中：${selected}`);
+  }
+  const base = parts.join(" · ");
+  const link = bloggerLinkLabel(row.bloggerLink);
+  if (!link) {
+    return base;
+  }
+  const withLink = `${base} · ${link}`;
+  return displayColumns(withLink) <= CHOOSER_LABEL_COLUMNS ? withLink : base;
 }
 
 function chooserTitle(row: OpenOrderHead): string {
   const owner = row.deliveryOwner?.trim();
-  return [row.nickname, row.projectName, owner ? `交付：${owner}` : undefined, row.bloggerLink]
+  const selected = selectedClock(row.selectedTime);
+  return [
+    row.nickname,
+    row.projectName,
+    owner ? `交付：${owner}` : undefined,
+    row.status?.trim() ? statusLabel(row.status) : undefined,
+    selected ? `选中：${selected}` : undefined,
+    row.bloggerLink,
+  ]
     .filter((item) => item?.trim())
     .join(" ");
+}
+
+function bloggerLinkLabel(value: string | undefined): string {
+  const link = value?.trim().replace(/^https?:\/\//, "") ?? "";
+  if (!link) {
+    return "";
+  }
+  return link.length > 48 ? `${link.slice(0, 45)}…` : link;
+}
+
+/** 和 CRM 详情里的选中时间同一套数字：库里的墙上时钟，不另加 8 小时。 */
+function selectedClock(value: string | undefined): string {
+  if (!value) {
+    return "";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${parsed.getUTCFullYear()}-${pad(parsed.getUTCMonth() + 1)}-${pad(parsed.getUTCDate())} ${pad(parsed.getUTCHours())}:${pad(parsed.getUTCMinutes())}`;
+}
+
+function displayColumns(value: string): number {
+  let width = 0;
+  for (const char of value) {
+    width += (char.codePointAt(0) ?? 0) > 0xff ? 2 : 1;
+  }
+  return width;
 }
 
 /** 表单里已经记住的编号。这一页没带时，再用上次保存的安装配置。 */
