@@ -222,6 +222,7 @@ const ORDER_HEAD_FIELDS = {
   bloggerLink: 1,
   deliveryOperationsUserName: 1,
   "selectedWorkflow.status": 1,
+  "selectedWorkflow.selectedTime": 1,
   "selectedWorkflow.currentFollowerName": 1,
 };
 
@@ -520,6 +521,7 @@ async function withProjects(database: Db, rows: Document[]): Promise<OpenOrderHe
       projectName: names.get(stringOf(row.projectId) ?? ""),
       bloggerLink: stringOf(row.bloggerLink),
       status: stringOf(workflow?.status),
+      selectedTime: iso(workflow?.selectedTime),
       deliveryOwner: stringOf(row.deliveryOperationsUserName) ?? stringOf(workflow?.currentFollowerName),
     };
   });

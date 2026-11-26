@@ -173,6 +173,8 @@ export interface OpenOrderHead {
   projectName?: string;
   bloggerLink?: string;
   status?: string;
+  /** 选中时间。Mongo 里是日期，这里收成 ISO。 */
+  selectedTime?: string;
   /** 和 OrderDoc.deliveryOwner 取法一样。 */
   deliveryOwner?: string;
 }

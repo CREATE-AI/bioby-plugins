@@ -118,15 +118,29 @@ test("brand ids keep one copy and paging can search", () => {
 
 test("the order chooser shows the delivery owner and can search by that name", () => {
   const rows = [
-    { id: "1", nickname: "小明", projectName: "春季", deliveryOwner: "张三", bloggerLink: "https://example.com/a" },
-    { id: "2", nickname: "小红", projectName: "春季", deliveryOwner: "李四" },
+    { id: "1", nickname: "小明", projectName: "春季", deliveryOwner: "张三", bloggerLink: "https://example.com/a", status: "FOLLOWING", selectedTime: "2026-11-25T16:30:00.000Z" },
+    { id: "2", nickname: "小红", projectName: "春季", deliveryOwner: "李四", status: "BARGAINING", selectedTime: "2026-11-20T09:00:00.000Z" },
     { id: "3", nickname: "小刚", projectName: "夏季" },
   ];
-  assert.equal(chooserLabel(rows[0]), "小明 · 春季 · 交付：张三 · example.com/a");
-  assert.equal(chooserLabel(rows[1]), "小红 · 春季 · 交付：李四");
+  assert.equal(chooserLabel(rows[0]), "小明 · 春季 · 交付：张三 · 跟进中 · 选中：2026-11-25 16:30 · example.com/a");
+  assert.equal(chooserLabel(rows[1]), "小红 · 春季 · 交付：李四 · 砍价中 · 选中：2026-11-20 09:00");
   assert.equal(chooserLabel(rows[2]), "小刚 · 夏季");
   const options = rows.map((row) => ({ value: row.id, label: { literal: chooserLabel(row) } }));
   assert.deepEqual(pageChoices(options, "李四", undefined, 50).options.map((option) => option.value), ["2"]);
+  assert.deepEqual(pageChoices(options, "跟进中", undefined, 50).options.map((option) => option.value), ["1"]);
+  assert.deepEqual(pageChoices(options, "2026-11-20", undefined, 50).options.map((option) => option.value), ["2"]);
+  const crowded = chooserLabel({
+    id: "4",
+    nickname: "Sans | Software and AI",
+    projectName: "Trista1124-合CS",
+    deliveryOwner: "TristaLee",
+    status: "VIDEO_DRAFT_REVISING",
+    selectedTime: "2026-11-03T10:00:00.000Z",
+    bloggerLink: "https://instagram.com/npmisans/very/long/profile/path",
+  });
+  assert.equal(crowded.includes("视频草稿修改中"), true);
+  assert.equal(crowded.includes("选中：2026-11-03 10:00"), true);
+  assert.equal(crowded.includes("instagram.com/npmisans/very/long/profile/path"), true);
 });
 
 test("push progress counts orders that already have a conversation", () => {

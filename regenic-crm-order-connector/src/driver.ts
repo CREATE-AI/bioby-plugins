@@ -39,6 +39,7 @@ import { brandIdsOf, pageChoices, projectIdsOf, uniqueStrings } from "./brands";
 import { listBrandChoices, listBrandChoicesByIds, listChooserHeads, listOrderHeadsByIds, listProjectChoices, listProjectChoicesByIds, mongoStore } from "./mongo-store";
 import { bindPushWebhook, clearPushArmed, forgetPushHost, kickPush, markPushArmed, pushArmed, readPushProgress, rememberPushHost, startDeliveryPush, stopPush } from "./push";
 import type { DeliveryStore, OpenOrderHead } from "./model";
+import { statusLabel } from "./status";
 import { advanceDelivery, parseOrderCursor } from "./sync";
 
 export const crmDeliverySyncDriver: ChannelDriver = {
@@ -792,18 +793,54 @@ export function chooserLabel(row: OpenOrderHead): string {
   if (owner) {
     parts.push(`交付：${owner}`);
   }
-  const link = row.bloggerLink?.trim().replace(/^https?:\/\//, "");
+  if (row.status?.trim()) {
+    parts.push(statusLabel(row.status));
+  }
+  const selected = selectedClock(row.selectedTime);
+  if (selected) {
+    parts.push(`选中：${selected}`);
+  }
+  const link = bloggerLinkLabel(row.bloggerLink);
   if (link) {
-    parts.push(link.length > 48 ? `${link.slice(0, 45)}…` : link);
+    parts.push(link);
   }
   return parts.join(" · ");
 }
 
 function chooserTitle(row: OpenOrderHead): string {
   const owner = row.deliveryOwner?.trim();
-  return [row.nickname, row.projectName, owner ? `交付：${owner}` : undefined, row.bloggerLink]
+  const selected = selectedClock(row.selectedTime);
+  return [
+    row.nickname,
+    row.projectName,
+    owner ? `交付：${owner}` : undefined,
+    row.status?.trim() ? statusLabel(row.status) : undefined,
+    selected ? `选中：${selected}` : undefined,
+    row.bloggerLink,
+  ]
     .filter((item) => item?.trim())
     .join(" ");
+}
+
+function bloggerLinkLabel(value: string | undefined): string {
+  const link = value?.trim().replace(/^https?:\/\//, "") ?? "";
+  if (!link) {
+    return "";
+  }
+  return link.length > 48 ? `${link.slice(0, 45)}…` : link;
+}
+
+/** 和 CRM 详情里的选中时间同一套数字：库里的墙上时钟，不另加 8 小时。 */
+function selectedClock(value: string | undefined): string {
+  if (!value) {
+    return "";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${parsed.getUTCFullYear()}-${pad(parsed.getUTCMonth() + 1)}-${pad(parsed.getUTCDate())} ${pad(parsed.getUTCHours())}:${pad(parsed.getUTCMinutes())}`;
 }
 
 /** 表单里已经记住的编号。这一页没带时，再用上次保存的安装配置。 */
