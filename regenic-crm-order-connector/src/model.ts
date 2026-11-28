@@ -38,6 +38,8 @@ export interface OrderDoc {
   id: string;
   projectId?: string;
   campaignId?: string;
+  /** 这张订单所属项目下的活动。没加载时只用订单自己的 campaignId。 */
+  projectCampaignIds?: string[];
   influencerId?: string;
   nickname?: string;
   platform?: string;
@@ -267,19 +269,41 @@ export interface ProjectStore {
   readOrderRows(ids: string[]): Promise<ProjectOrderRow[]>;
 }
 
+/** 订单自己的活动，再加上所属项目下已经加载的活动。 */
+export function campaignIdsOf(order: OrderDoc): string[] {
+  const ids = new Set<string>();
+  for (const id of order.projectCampaignIds ?? []) {
+    const trimmed = id.trim();
+    if (trimmed) {
+      ids.add(trimmed);
+    }
+  }
+  const own = order.campaignId?.trim();
+  if (own) {
+    ids.add(own);
+  }
+  return [...ids];
+}
+
+/**
+ * 邮件写了订单号就必须是这张。没写订单号时，活动号必须是这张订单所属项目下的活动。
+ * 项目号或活动号为空的信不算这张订单的往来。达人是否同一个由查询条件保证。
+ */
 export function mailBelongs(mail: MailDoc, order: OrderDoc): boolean {
   const folder = (mail.folder ?? "").toUpperCase();
   if (folder !== "INBOX" && folder !== "SPAM" && folder !== "SENT") {
     return false;
   }
-  if (mail.projectFieldId?.trim()) {
-    return mail.projectFieldId.trim() === order.id;
+  const orderOnMail = mail.projectFieldId?.trim();
+  if (orderOnMail) {
+    return orderOnMail === order.id;
+  }
+  const campaign = mail.campaignId?.trim();
+  if (!campaign || !campaignIdsOf(order).includes(campaign)) {
+    return false;
   }
   if (order.projectId && mail.projectId && mail.projectId !== order.projectId) {
     return false;
-  }
-  if (order.campaignId && mail.campaignId) {
-    return order.campaignId === mail.campaignId;
   }
   return true;
 }

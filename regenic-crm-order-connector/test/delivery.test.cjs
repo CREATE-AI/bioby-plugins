@@ -30,6 +30,7 @@ const { deliveryCursorKey } = require("../dist/cursor-store");
 const { settleEndedThread, setThreadFoldClient } = require("../dist/thread-fold");
 const { isEndedStatus } = require("../dist/status");
 const { influencerMailScope, pinDatabaseUri } = require("../dist/mongo-store");
+const { mailBelongs } = require("../dist/model");
 const { decodeDocument, decodeStoredText } = require("../dist/stored-text");
 const { compactTime } = require("../dist/time");
 const { SOURCE } = require("../dist/locators");
@@ -377,13 +378,39 @@ test("push webhook only accepts the token from this process", () => {
   resetPushState();
 });
 
-test("mail scope keeps untagged influencer mail when the order has no campaign", () => {
-  const scope = influencerMailScope(order({ campaignId: "", projectId: "p1", influencerId: "inf", id: "order-a" }));
-  const json = JSON.stringify(scope);
-  assert.equal(json.includes("campaignId"), false);
+test("mail without an order id joins only a campaign under the same project", () => {
+  const row = order({
+    id: "order-a",
+    projectId: "p1",
+    campaignId: "camp",
+    influencerId: "inf",
+    projectCampaignIds: ["camp", "sibling"],
+  });
+  assert.equal(mailBelongs({ id: "1", folder: "INBOX", campaignId: "sibling" }, row), true);
+  assert.equal(mailBelongs({ id: "2", folder: "SENT", campaignId: "camp", projectId: "p1" }, row), true);
+  assert.equal(mailBelongs({ id: "3", folder: "INBOX" }, row), false);
+  assert.equal(mailBelongs({ id: "4", folder: "INBOX", projectId: "p1" }, row), false);
+  assert.equal(mailBelongs({ id: "5", folder: "INBOX", campaignId: "other" }, row), false);
+  assert.equal(mailBelongs({ id: "6", folder: "INBOX", campaignId: "sibling", projectId: "other" }, row), false);
+  assert.equal(mailBelongs({ id: "7", folder: "INBOX", projectFieldId: "order-a" }, row), true);
+  assert.equal(mailBelongs({ id: "8", folder: "SENT", projectFieldId: "other-order", campaignId: "camp" }, row), false);
+
+  const json = JSON.stringify(influencerMailScope(row));
+  assert.equal(json.includes("sibling"), true);
   assert.equal(json.includes("inf"), true);
   assert.equal(json.includes("order-a"), true);
   assert.equal(json.includes("p1"), true);
+
+  const untagged = JSON.stringify(influencerMailScope(order({
+    campaignId: "",
+    projectId: "p1",
+    influencerId: "inf",
+    id: "order-a",
+    projectCampaignIds: [],
+  })));
+  assert.equal(untagged.includes("campaignId"), false);
+  assert.equal(untagged.includes("p1"), false);
+  assert.equal(untagged.includes("order-a"), true);
 });
 
 test("compact time has no colon", () => {
@@ -1002,6 +1029,7 @@ test("mail keeps the new text and drops the quoted history", async () => {
         subject: "Re: 合作",
         content: "可以，按 200 做。\n\nOn Mon, Nov 2, 2026 at 10:00 AM Sans <sans@gmail.com> wrote:\n请报价",
         sentDate: "2026-11-06T08:00:00.000Z",
+        campaignId: "camp",
       },
       {
         id: "m-html",
@@ -1010,6 +1038,7 @@ test("mail keeps the new text and drops the quoted history", async () => {
         subject: "html",
         htmlContent: "<p>新的一段</p><blockquote>旧的一段</blockquote>",
         sentDate: "2026-11-06T08:01:00.000Z",
+        campaignId: "camp",
       },
     ],
   }));
@@ -1310,6 +1339,7 @@ test("older influencer mail is read once even when the live watermark is already
         subject: "旧邮件",
         content: "还在",
         sentDate: "2026-01-01T00:00:00.000Z",
+        projectFieldId: "a",
       }],
     }),
     cursor,

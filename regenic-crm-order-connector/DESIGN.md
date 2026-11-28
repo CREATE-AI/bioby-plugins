@@ -64,8 +64,8 @@ CRM 后端是 `bioby-email`，订单在 MongoDB 的 `project_fields`。前端 `b
 
 邮件对照订单详情页的「邮件和跟进」，查询方式和 `InfluencerCampaignReplyLookup.loadThread` 相同，再按 `DecisionContextLoader.thisOrder` 滤到这张单：
 
-- 先按项目、活动、达人查，文件夹只含 `INBOX`、`SPAM`、`SENT`。`SENT` 是我们发的，`INBOX` 和 `SPAM` 都是达人回的。
-- 邮件上有 `projectFieldId` 时必须等于这张单；没有时才看是不是同一个 `campaignId`。
+- 先按达人查，文件夹只含 `INBOX`、`SPAM`、`SENT`。`SENT` 是我们发的，`INBOX` 和 `SPAM` 都是达人回的。
+- 邮件上有订单号（`projectFieldId`）时必须等于这张单。没有订单号时，活动号必须是这张订单所属项目下的活动，并且达人就是这张订单的达人。项目号或活动号为空的信不并进来。写了别的项目号的信也不并进来。
 - 详情页判断用的邮件最多 10 封、跟进最多 8 条。会话不按这个截断。第一次按时间分几页写完。
 - 增量检查用邮件 `sentDate` 或 `updatedTime` 晚于这张订单的水位，不把历史再全读一遍。
 - `SENT` 的信要写清楚是谁发的。邮件 `messageId` 去掉尖括号后，按下面的顺序找，找到第一个就用：

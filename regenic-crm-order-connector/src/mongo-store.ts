@@ -10,7 +10,7 @@ import {
 } from "mongodb";
 import { narrowProjectIds } from "./brands";
 import { decodeDocument } from "./stored-text";
-import { bareMessageId } from "./model";
+import { bareMessageId, campaignIdsOf } from "./model";
 import type {
   CollectionDoc,
   DecisionDoc,
@@ -93,8 +93,14 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
     },
 
     async readOrder(id) {
-      const row = await (await db()).collection("project_fields").findOne(loose({ _id: asId(id) }));
-      return row ? mapOrder(row) : null;
+      const database = await db();
+      const row = await database.collection("project_fields").findOne(loose({ _id: asId(id) }));
+      if (!row) {
+        return null;
+      }
+      const order = mapOrder(row);
+      order.projectCampaignIds = await campaignIdsUnderProject(database, order.projectId);
+      return order;
     },
 
     async readProject(id) {
@@ -106,11 +112,14 @@ export function mongoStore(uri: string, dbName: string): DeliveryStore {
       if (!order.influencerId) {
         return { items: [], full: false };
       }
+      const database = await db();
+      if (!order.projectCampaignIds) {
+        order.projectCampaignIds = await campaignIdsUnderProject(database, order.projectId);
+      }
       const scope: Filter<Document>[] = [
         ...influencerMailScope(order),
         pageFilter(query, "sentDate"),
       ];
-      const database = await db();
       const rows = await database
         .collection("emailInbox")
         .find({ $and: scope })
@@ -307,35 +316,43 @@ export function influencerMailScope(order: OrderDoc): Filter<Document>[] {
       { [field]: "" },
     ],
   });
-  const scope: Filter<Document>[] = [
+  const campaigns = campaignIdsOf(order);
+  const sameProjectCampaign = campaigns.length === 0
+    ? []
+    : [{
+      $and: [
+        blank("projectFieldId"),
+        campaigns.length === 1 ? { campaignId: campaigns[0] } : { campaignId: { $in: campaigns } },
+        ...(order.projectId ? [{
+          $or: [
+            { projectId: order.projectId },
+            ...blank("projectId").$or,
+          ],
+        }] : []),
+      ],
+    }];
+  return [
     loose({ matchedInfluencerId: order.influencerId }),
     loose({ folder: { $in: ["INBOX", "SPAM", "SENT", "Inbox", "Sent", "Spam"] } }),
     loose({
       $or: [
         { projectFieldId: order.id },
-        blank("projectFieldId"),
+        ...sameProjectCampaign,
       ],
     }),
   ];
-  if (order.projectId) {
-    scope.push(loose({
-      $or: [
-        { projectId: order.projectId },
-        { projectFieldId: order.id },
-        blank("projectId"),
-      ],
-    }));
+}
+
+async function campaignIdsUnderProject(database: Db, projectId: string | undefined): Promise<string[]> {
+  const project = projectId?.trim();
+  if (!project) {
+    return [];
   }
-  if (order.campaignId) {
-    scope.push(loose({
-      $or: [
-        { campaignId: order.campaignId },
-        { projectFieldId: order.id },
-        blank("campaignId"),
-      ],
-    }));
-  }
-  return scope;
+  const rows = await database.collection("campaigns").find(
+    loose({ projectId: project }),
+    { projection: { _id: 1 } },
+  ).toArray();
+  return rows.map((row) => idOf(row._id)).filter(Boolean);
 }
 
 function loose(filter: Record<string, unknown>): Filter<Document> {
