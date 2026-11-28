@@ -177,21 +177,11 @@ export async function advanceDelivery(input: {
   while (records.length < input.pageSize && guard < 8) {
     guard += 1;
     if (cursor.stage === "live") {
-      if (isEndedStatus(order.status) && (cursor.logText ?? 0) >= DELIVERY_LOG_TEXT_VERSION) {
+      hasMore = await pullLive(input, cursor, label, records);
+      if (!hasMore && isEndedStatus(order.status)) {
         finishEnded(order, input.project, cursor, records, input.now);
         wroteEnd = true;
-        hasMore = false;
-        break;
       }
-      if (isEndedStatus(order.status)) {
-        hasMore = await pullLogs(input, cursor, label, records, input.pageSize - records.length, false);
-        if (!hasMore) {
-          finishEnded(order, input.project, cursor, records, input.now);
-          wroteEnd = true;
-        }
-        break;
-      }
-      hasMore = await pullLive(input, cursor, label, records);
       break;
     }
     const more = await pullHistoryStage(input, cursor, label, records, input.pageSize - records.length);
