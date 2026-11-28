@@ -715,6 +715,62 @@ test("an ended order still in the delivery view is marked done and then stays qu
   assert.equal(reopened.records.some((record) => String(record.external_id).endsWith(":end-done")), false);
 });
 
+test("abandoning a live order syncs the new log before the conversation ends", async () => {
+  const following = await runUntilLive(order({ status: "FOLLOWING" }));
+  assert.equal(following.cursor.stage, "live");
+  assert.equal(following.cursor.ended, undefined);
+  const store = emptyStore({
+    logs: [{
+      id: "log-abandon",
+      logTime: "2026-11-06T12:00:00.000Z",
+      changeType: "UPDATE",
+      operatorName: "运营",
+      changes: [{ fieldName: "selectedWorkflow.status", oldValue: "FOLLOWING", newValue: "ABANDONED" }],
+    }],
+  });
+  const advanced = await advanceDelivery({
+    orderId: "a",
+    order: order({ status: "ABANDONED", updatedTime: "2026-11-06T12:00:00.000Z" }),
+    project: project(),
+    store,
+    cursor: following.cursor,
+    pageSize: 20,
+    now: "2026-11-06T12:05:00.000Z",
+  });
+  assert.equal(advanced.records.some((record) => record.external_id === "a:log-log-abandon"), true);
+  assert.equal(advanced.records.some((record) => record.external_id.includes(":status-")), false);
+  assert.equal(advanced.cursor.ended, true);
+  assert.equal(advanced.wroteEnd, true);
+
+  const quiet = await advanceDelivery({
+    orderId: "a",
+    order: order({ status: "ABANDONED", updatedTime: "2026-11-06T12:00:00.000Z" }),
+    project: project(),
+    store,
+    cursor: advanced.cursor,
+    pageSize: 20,
+    now: "2026-11-06T13:00:00.000Z",
+  });
+  assert.equal(quiet.records.some((record) => record.external_id === "a:log-log-abandon"), false);
+});
+
+test("abandoning without a status log writes the status line before ending", async () => {
+  const following = await runUntilLive(order({ status: "FOLLOWING" }));
+  const advanced = await advanceDelivery({
+    orderId: "a",
+    order: order({ status: "ABANDONED", updatedTime: "2026-11-06T12:00:00.000Z" }),
+    project: project(),
+    store: emptyStore(),
+    cursor: following.cursor,
+    pageSize: 20,
+    now: "2026-11-06T12:05:00.000Z",
+  });
+  const status = advanced.records.find((record) => record.external_id.includes(":status-"));
+  assert.match(recordText(status), /交付状态：已放弃/);
+  assert.equal(advanced.cursor.ended, true);
+  assert.equal(advanced.wroteEnd, true);
+});
+
 test("an old end sentence is removed once", async () => {
   const cursor = parseOrderCursor(JSON.stringify({
     ...emptyOrderCursor(),
